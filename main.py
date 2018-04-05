@@ -1,22 +1,55 @@
 # -*- coding: utf-8 -*-
 
-from __future__ import division, print_function, unicode_literals
-from typing import List, Union
-from PyQt4 import QtGui, QtCore
-from collections import namedtuple
-import json
-import random
-import os.path
+"""
+:author: Fady Adel (2masadel at gmail dot com)
+:link: https://github.com/faddyy
+"""
 
-# ==================== Data Holders ====================
+
+from __future__ import (absolute_import, division,
+                        print_function, unicode_literals)
+
+import datetime
+import glob
+import json
+import os
+import random
+import re
+import sys
+from collections import namedtuple
+
+from PyQt4 import QtGui, QtCore
+from typing import List, Dict, Union, Tuple
+
+if sys.version_info[0] < 3:
+    str = unicode
+    chr = unichr
+
+# =======================================================
+
+headers = ['school',
+           'grade',
+           'number',
+           'degree',
+           'out_of',
+           'left',
+           'failed_at',
+           'test',
+           ]
+
+# ==================== Data Holders =====================
 Answer = namedtuple("Answer", "string valid")
 Question = namedtuple("Question", "string pic answers")
-Test = namedtuple("Test", "name description questions degree")
+Test = namedtuple("Test", "name description time questions degree")
 
 
-# ==================== Util Functions ====================
+# =======================================================
+
+
+# ==================== Util Function ====================
 def parse_tests(file_name):
-    # type: (Union[str, unicode]) -> List[Test]
+    # type: (str) -> List[Test]
+
     with open(file_name) as f:
         tests = json.load(f)
 
@@ -24,26 +57,74 @@ def parse_tests(file_name):
     for test in tests:
         name = test
         test = tests[test]
-        description = test["description"]
-        degree = test["degree"]
         questions = [Question(q["question"], q["pic"], [Answer(a, i in q["valid"]) for i, a in enumerate(q["answers"])])
                      for q in test["questions"]]
 
-        test_list.append(Test(name, description, questions, degree))
+        test_list.append(Test(name, test["description"], test["time"], questions, test["degree"]))
 
     return test_list
 
 
+def parse_degrees(*args):
+    # type: (*str) -> Tuple[Dict[str, Dict[str, Union[float, int, str]]], List[str]]
+
+    assert not args
+
+    data = {}
+    errs = []
+    err = False
+    for fn in args:
+        with open(fn) as f:
+            d = json.load(f)
+            for j in d.values():
+                if len(set(j.keys()) & set(headers)) < len(headers):
+                    errs.append(fn)
+                    err = True
+                    break
+
+            if err:
+                err = False
+                continue
+
+            data.update(d)
+
+    return data, errs
+
+
+def center_widget(widget):
+    # type: (QtGui.QWidget) -> None
+    widget.move(QtGui.QApplication.desktop().screen().rect().center() - widget.rect().center())
+
+
+def rot13(string):
+    # type: (str) -> str
+    return "".join(map(lambda c: chr(ord(c) + 13), list(string)))
+
+
+def format_secs(seconds, sp=("ساعة", "دقيقة", "ثانية"), sep="، "):
+    return sep.join(["%d %s" % (int(d), s) for d, s in zip(str(datetime.timedelta(seconds=seconds)).split(':'), sp)
+                     if not int(d) == 0])
+
+
+# =======================================================
+
+
 TESTS = parse_tests("tests.json")
+questions = [Question("sad", None, [Answer("Fuck", False)] * 3)] * 3
+TESTS.extend([Test("Hey", "you!", 5000, questions, 3), Test("Hello", "asda", 2200, questions, 3),
+              Test("How", "are you?", 2705, questions, 5)])
 
 
-class MainWizard(QtGui.QWizard):
+# ======================= Test Wizard =======================
+
+class TestWizard(QtGui.QWizard):
     degrees = []
 
-    def __init__(self, parent=None, test_num=0):
-        super(MainWizard, self).__init__(parent)
-        self.test = TESTS[test_num]
-
+    def __init__(self, test, parent=None):
+        # type: (Test, QtGui.QWidget) -> None
+        super(TestWizard, self).__init__(parent)
+        self.test = test
+        self.degree_per_q = self.test.degree / len(self.test.questions)
         self.setButtonText(self.NextButton, 'التالي >')
         self.setButtonText(self.CancelButton, 'الغاء')
         self.setButtonText(self.FinishButton, 'انتهي')
@@ -62,141 +143,10 @@ class MainWizard(QtGui.QWizard):
                            "QLabel {font: bold 15pt}\nQRadioButton, QCheckBox {font: 10pt}")
 
         self.addPage(FormPage())
+
         for question in self.test.questions:
             self.addPage(QuestionPage(question))
 
-        # ====================== The Questions (the whole thing really (:) ==========================
-        # self.addPage(QuestionPage(Question(" ما ميزة شراء كمبيوتر لوحي (tablet) عن شراء كمبيوتر محمول عادي (laptop)؟",
-        #                                    ("القدرة اللاسلكية", "حجم/وزن أقل", "وصول أسرع إلى الإنترنت",
-        #                                     "قدرات كتابة أسرع", "سرعة معالجة أسرع",
-        #                                     "إمكانية توصيل عدد أكبر من الأجهزة المرفقة"), (1,)
-        #                                    )))
-        #
-        # self.addPage(QuestionPage(Question("ما ترقية الأجهزة المحتمل استخدامها لإضافة مزيد"
-        #                                    + " من مساحة التخزين إلى هاتف ذكي حديث؟",
-        #                                    ("microSD", "قرص ثابت", "CompactFlash", "محرك أقراص Flash"),
-        #                                    (0,)
-        #                                    )))
-        #
-        # self.addPage(QuestionPage(Question("ما المكون الذي يوضع داخل علبة الكمبيوتر؟",
-        #                                    ("الشاشة", "الطابعة", "(RAM) ذاكرة الوصول العشوائي",
-        #                                     "الثابتة USB محرك أقراص"),
-        #                                    (2,)
-        #                                    )))
-        #
-        # self.addPage(QuestionPage(Question("ما المكون المادي للكمبيوتر الذي يجب تثبيته"
-        #                                    + " في كمبيوتر شخصي لتوفير الاتصال بالشبكة؟",
-        #                                    ("ناقل PCI", "المنفذ التسلسلي", "واجهة الشبكة", "فتحة التوسعة"),
-        #                                    (2,)
-        #                                    )))
-        # self.addPage(
-        #     QuestionPage(Question("أي نوعين من أنظمة التشغيل يجري استخدامهما في الهواتف الذكية؟ (اختر خيارين.)",
-        #                           ("iOS", "OS X", "Android", "Snow Leopard", "Windows 7"),
-        #                           (0, 2)
-        #                           )))
-        # self.addPage(QuestionPage(Question("أي جهازين مما يلي يعدان من أجهزة الإخراج؟ (اختر خيارين.)",
-        #                                    ("لوحة المفاتيح", "الشاشة", "الماوس", "الطابعة", "كاميرا الفيديو"),
-        #                                    (1, 3)
-        #                                    )))
-        # self.addPage(QuestionPage(Question("أي إجراءين مما يلي يعدان إجراءات احتياطية عامة يجب اتباعهما"
-        #                                    + " عند استخدام الأدوات اليدوية؟ (اختر خيارين.)",
-        #                                    ("استخدام أدوات ذات حجم ونوع صحيحين.",
-        #                                     "الحرص دومًا على حمل الأدوات ذات الأطراف"
-        #                                     + " المدببة بجانبك بحيث تتجه أطرافها المدببة لأعلى.",
-        #                                     "بقاء أدوات القطع حادة وفي حالة جيدة للعمل.",
-        #                                     "حمل الأدوات التي تستخدمها بكثرة في جيوبك."),
-        #                                    (0, 2)
-        #                                    )))
-        #
-        # self.addPage(QuestionPage(Question("في حالة فقد جهاز محمول أو سرقته، ما الإجراءان اللذان يساعدان في"
-        #                                    + " حماية المعلومات الخاصة المخزنة على هذا الجهاز؟ (اختر خيارين.)",
-        #                                    ("استخدام عميل بريد إلكتروني آمن.", "تشفير وسائط التخزين.",
-        #                                     "تمكين كلمة مرور للوصول إلى الجهاز.",
-        #                                     "إيقاف تشغيل الجهاز حينما لا يكون قيد الاستخدام.",
-        #                                     "إيقاف تشغيل الاتصال اللاسلكي حينما لا يكون قيد الاستخدام."),
-        #                                    (1, 2)
-        #                                    )))
-        # self.addPage(PicQuestionPage("image001.png",
-        #                              Question(
-        #                                  "بالنظر إلى الصورة الموضحه ما العنصر الذي يشير إليه الرمز المعروض؟",
-        #                                  ("مجلد عبارة عن مجموعة من المجلدات الفرعية والملفات",
-        #                                   "مستند Word مخزن على القرص", "ملف قاعدة بيانات",
-        #                                   "برنامج يُستخدم في التنقل عبر الملفات المخزنة على القرص"),
-        #                                  (0,)
-        #                              )))
-        # self.addPage(QuestionPage(Question("كيف يمكن تظليل مقطع نصي في"
-        #                                    + " مستند \"المفكرة\" لنسخه إلى مكان آخر داخل المستند؟",
-        #                                    ("من خلال النقر فوق الرمز \"نسخ\" ثم سحب المؤشر فوق النص المراد نسخه",
-        #                                     "من خلال النقر نقرًا مزدوجًا فوق الكلمات التي تريد نسخها",
-        #                                     '"ونقل المؤشر إلى نهاية النص ثم النقر فوق الرمز "نسخ Windows من خلال'
-        #                                     + ' نقل المؤشر إلى بداية النص المراد نسخه والضغط على مفتاح رمز',
-        #                                     "من خلال النقر فوق بداية النص وسحب المؤشر إلى نهاية النص، ثم تحرير الزر"),
-        #                                    (3,)
-        #                                    )))
-        # self.addPage(PicQuestionPage("image002.png",
-        #                              Question("بالنظر إلى الصورة أدناه. لماذا يظهر الخيار تراجع باللون"
-        #                                       + " الأسود، في حين تظهر العناصر الأخرى باللون الرمادي؟",
-        #                                       ("تظهر الأوامر باللون الأسود، بينما تظهر عمليات التحرير باللون الرمادي",
-        #                                        ".يتغير لون مجموعات عناصر القائمة إلى اللون"
-        #                                        + " الأسود واللون الرمادي لكي يتم العثور عليها بسهولة أكبر",
-        #                                        "لا توجد عمليات يمكن التراجع عنها، لذلك فإن هذه العملية غير متوفرة",
-        #                                        "لا يوجد نص يمكن قصه أو نسخه أو لصقه أو حذفه،"
-        #                                        + " لذلك فإن هذه العمليات غير متوفرة"),
-        #                                       (3,)
-        #                                       )))
-        # self.addPage(PicQuestionPage("image003.png",
-        #                              Question("بالنظر إلى الصورة أدناه. ما سبب ظهور القائمة الموضحة"
-        #                                       " بالصورة على شاشة المستخدم؟",
-        #                                       ("نقر المستخدم نقرًا مزدوجًا فوق أحد رموز سطح المكتب",
-        #                                        "نقر المستخدم بزر الماوس الأيمن فوق أحد رموز سطح المكتب",
-        #                                        ".Enter تظليل المستخدم لرمز ثم الضغط على مفتاح",
-        #                                        ".Esc تظليل المستخدم لرمز ثم الضغط على مفتاح"),
-        #                                       (1,)
-        #                                       )))
-        # self.addPage(QuestionPage(Question("اشترى طالب كمبيوترًا لوحيًا جديدًا مزودًا بإمكانية WiFi."
-        #                                    + " فما المطلوب لتوصيل هذا الجهاز بالإنترنت؟",
-        #                                    ("شبكة G3 أو G4", "شركة هواتف", "شبكة محلية (LAN) لاسلكية",
-        #                                     "موفر خدمات هاتف محمول"),
-        #                                    (2,)
-        #                                    )))
-        # self.addPage(QuestionPage(Question("ما الإجراء الاحتياطي الذي يجب اتخاذه قبل"
-        #                                    + " إزالة أي مكون إلكتروني من نظام الكمبيوتر؟",
-        #                                    ("وضع الكمبيوتر على فرش عازل",
-        #                                     "التأكد من أن الكمبيوتر غير موصل بالتيار الكهربائي",
-        #                                     "توصيل سلك تأريض بعلبة الكمبيوتر",
-        #                                     "استخدام الأدوات المعدنية المعتمدة فقط"),
-        #                                    (1,)
-        #                                    )))
-        # self.addPage(QuestionPage(Question("من المتوقع أن يستغرق تحديث نظام شركة بأكملها حوالي 60 ساعة عمل من فني"
-        #                                    + " واحد حتى يكتمل. فكم المدة التي يستغرقها خمسة فنيين لأداء هذا"
-        #                                    + " التحديث إذا عمل كل واحد منهم بنفس المقدار الزمني؟",
-        #                                    ("5 ساعات", "8 ساعات", "10 ساعات", "12 ساعات"),
-        #                                    (3,)
-        #                                    )))
-        # self.addPage(QuestionPage(Question("يقوم طالب بكتابة لغة جديدة من اختراعه باستعمال حروف لاتينية. فيما يلي بعض"
-        #                                    + " الكلمات التي وضعها الطالب: " + "<br /> " + "(stalopheah تعني good day) و "
-        #                                    + " (stalopjink تعني goodness) و (drahplunk تعني light house) و "
-        #                                    + "(finsjink تعني happiness) و (pluckgercki تعني house fly)"
-        #                                    + "<br /><br />"
-        #                                    + "فما الكلمة التي يحب علي الطالب استخدامها لتعني \"daylight\"؟",
-        #                                    ("jinkstalop", "stalopflins", "heahflins", "heahdrah", "drahjink", "heahgrecki"),
-        #                                    (3,)
-        #                                    )))
-        # self.addPage(QuestionPage(Question("من خصائص ذاكرة الوصول العشوائى",
-        #                                    ("لا تؤثر على سرعة اداء الحاسب", "تفقد محتوياتها عند انقطاع التيار الكهربائى",
-        #                                     "لا يمكن تغيير محتوياتها", "دائمة"),
-        #                                    (1,)
-        #                                    )))
-        # self.addPage(QuestionPage(Question("أصغر وحدة تخزين فى الحاسب الالى",
-        #                                    ("Bit", "Byte", "KiloByte", "MegaByte"),
-        #                                    (0,)
-        #                                    )))
-        # self.addPage(QuestionPage(Question("اى رقم يكمل تسلسل الأرقام : "
-        #                                    + "4، 6، 9، 6، 14، 6، ...",
-        #                                    ("6", "17", "19", "21"),
-        #                                    (2,)
-        #                                    )))
-        # ===========================================================================================
         self.addPage(FinalPage())
 
         def f():
@@ -205,7 +155,7 @@ class MainWizard(QtGui.QWizard):
 
             if not all(i != -1 for i in d) and not self.timeout:
                 msg_box = QtGui.QMessageBox(QtGui.QMessageBox.Warning,
-                                            "انتبه", 'انت لم تجب عن كل السئلة, هل تريد المتابعة؟',
+                                            "انتبه", 'انت لم تجب عن كل السئلة، هل تريد المتابعة؟',
                                             QtGui.QMessageBox.NoButton, self)
                 msg_box.addButton("&اجل", QtGui.QMessageBox.AcceptRole)
                 msg_box.addButton("&لا", QtGui.QMessageBox.RejectRole)
@@ -215,9 +165,10 @@ class MainWizard(QtGui.QWizard):
                 return False
             return True
 
+        #: validation happens in the last question page (-2 by index of pages)
         self.page(self.pageIds()[-2]).validatePage = f
 
-        self.time = 2700  # 45 minutes
+        self.time = test.time
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update_lcd)
         self.timeout = self.timer_started = False
@@ -228,7 +179,7 @@ class MainWizard(QtGui.QWizard):
 
         if self.time >= 0:
             if isinstance(self.currentPage(), QuestionPage):
-                self.currentPage().lcdScreen.display("%d:%02d" % (self.time / 60, self.time % 60))
+                self.currentPage().lcdScreen.display("%d:%02d" % (self.time // 60, self.time % 60))
         else:
             self.timeout = True
             self.timer.stop()
@@ -256,7 +207,7 @@ class MainWizard(QtGui.QWizard):
             if self.currentId() + 1 in self.already_visited_pages:
                 return self.currentId() + 1
             return self.pageIds()[-1]
-        return super(MainWizard, self).nextId()
+        return super(TestWizard, self).nextId()
 
     def next_or_back_clicked(self):
         if self.currentId() == self.pageIds()[-2] and not self.finished_answering:
@@ -273,9 +224,12 @@ class MainWizard(QtGui.QWizard):
                 self.timer.stop()
             self.disallow_answering()
 
+        if self.currentId() == self.pageIds()[1]:
+            self.button(QtGui.QWizard.BackButton).setDisabled(True)
+
         p = self.currentPage()
         if isinstance(p, QuestionPage):
-            p.lcdScreen.display("%d:%02d" % (self.time / 60, self.time % 60))
+            p.lcdScreen.display("%d:%02d" % (self.time // 60, self.time % 60))
 
     def calculate(self):
         self.degrees = []
@@ -283,6 +237,17 @@ class MainWizard(QtGui.QWizard):
             p = self.page(p)
             if isinstance(p, QuestionPage):
                 self.degrees.append(p.degree)
+
+    def closeEvent(self, event):
+        # type: (QtGui.QCloseEvent) -> None
+        if not self.pageIds()[-1] > self.currentId() > 0:
+            event.accept()
+        elif (QtGui.QMessageBox.question(self, "هل انت متأكد؟", "انت علي وشك ان تغلق النافذة، كل الإجابات سوف تنسي.",
+                                         QtGui.QMessageBox.Yes | QtGui.QMessageBox.No)) == QtGui.QMessageBox.Yes:
+            self.parent().show()
+            event.accept()
+        else:
+            event.ignore()
 
 
 class FormPage(QtGui.QWizardPage):
@@ -317,25 +282,10 @@ class FormPage(QtGui.QWizardPage):
         self.schooledit.setPlaceholderText('ادخل اسم مدرستك')
         self.numberedit.setPlaceholderText('ادخل رقم تليفونك')
 
-        # completer = QtGui.QCompleter()
-        # self.gradeedit.setCompleter(completer)
-        # model = QtGui.QStringListModel()
-        # model.setStringList([
-        #     "الأول الإعدادي",
-        #     "الثاني الإعدادي",
-        #     "الثالث الإعدادي",
-        #     "الأول الثانوي",
-        #     "الثاني الثانوي",
-        #     "الثالث الثانوي",
-        # ])
-        # completer.setModel(model)
-
         self.gradecombo = QtGui.QComboBox()
-        # self.gradecombo.setEditable(True)
 
         e = [self.nameedit, self.schooledit, self.numberedit, self.gradecombo]
         for i in e:
-            # if isinstance(i, QtGui.QLineEdit): i.setAlignment(QtCore.Qt.AlignRight)
             font = i.font()
             font.setPointSize(11)
             font.setBold(True)
@@ -353,13 +303,13 @@ class FormPage(QtGui.QWizardPage):
         self.registerField("grade*", self.gradecombo)
         self.registerField("number*", self.numberedit)
 
-        nameL = QtGui.QLabel('&' + 'الاسم :')
+        nameL = QtGui.QLabel('الاسم :')
         nameL.setBuddy(self.nameedit)
-        schoolL = QtGui.QLabel('&' 'المدرسة :')
+        schoolL = QtGui.QLabel('المدرسة :')
         schoolL.setBuddy(self.schooledit)
-        gradeL = QtGui.QLabel('&' + 'الصف :')
+        gradeL = QtGui.QLabel('الصف :')
         gradeL.setBuddy(self.gradecombo)
-        numberL = QtGui.QLabel('&' + 'رقم التليفون :')
+        numberL = QtGui.QLabel('رقم التليفون :')
         numberL.setBuddy(self.numberedit)
 
         my_layout.addWidget(nameL, 0, 2)
@@ -426,7 +376,7 @@ class FinalPage(QtGui.QWizardPage):
     def initializePage(self):
 
         degrees = self.wizard().degrees
-
+        test = self.wizard().test
         name = self.field("name").toString()
         school = self.field("school").toString()
         grade = FormPage.GRADES[self.field("grade").toInt()[0] - 1]
@@ -443,30 +393,41 @@ class FinalPage(QtGui.QWizardPage):
 
         vm = self.degree_model
         vm.insertRow(0)
-        test = self.wizard().test
-        vm.setData(vm.index(0, 0), test.degree / len(test.questions))
+        vm.setData(vm.index(0, 0), self.wizard().degree_per_q)
         vm.setData(vm.index(0, 1), test.degree)
         vm.setData(vm.index(0, 2), sum_of_degrees)
 
-        failed_at = [degrees.index(i, f) for f, i in enumerate(degrees) if i == 0]
-        left = [degrees.index(i, f) for f, i in enumerate(degrees) if i == -1]
-        user = {"school": unicode(school), "grade": unicode(grade), "number": unicode(number),
-                "degree": unicode(sum_of_degrees), "outof": QuestionPage.QUESTION_NUM * QuestionPage.QUESTION_DEGREE,
-                "failed_at": failed_at, "left": left, "test": TESTS[self.wizard().test_num].name}
+        failed_at = []
+        left = []
+        for i, v in enumerate(degrees):
+            if v == 0:
+                failed_at.append(i)
+            elif v == -1:
+                left.append(i)
 
-        if not os.path.exists("data/degrees.json"):
-            with open("data/degrees.json", "w") as f:
+        user = dict(zip(headers, [str(school),
+                                  str(grade),
+                                  str(number),
+                                  sum_of_degrees,
+                                  test.degree,
+                                  left,
+                                  failed_at,
+                                  test.name,
+                                  ]))
+
+        if not os.path.exists("degrees.json"):
+            with open("degrees.json", "w") as f:
                 f.write("{}")
 
-        with open("data/degrees.json", "r") as f:
+        with open("degrees.json", "r") as f:
             try:
                 data = json.load(f)
             except ValueError as e:
                 print("error" + str(e))
                 data = {}
 
-        with open("data/degrees.json", "w") as f:
-            data[unicode(name)] = user
+        with open("degrees.json", "w") as f:
+            data[str(name)] = user
             json.dump(data, f)
 
 
@@ -493,10 +454,7 @@ class QuestionPage(QtGui.QWizardPage):
         self.question.setWordWrap(True)
         my_layout.addWidget(self.question)
         self.setTitle("سؤال رقم " + str(self.id))
-        hline = QtGui.QFrame()
-        hline.setFrameShape(QtGui.QFrame.HLine)
-        hline.setFrameShadow(QtGui.QFrame.Sunken)
-        my_layout.addWidget(hline)
+        my_layout.addWidget(QtGui.QLabel("<hr>"))
 
         if self.is_radio:
             self.answers = QtGui.QButtonGroup()
@@ -543,7 +501,7 @@ class QuestionPage(QtGui.QWizardPage):
         if self.is_radio:
             valid = tuple(map(lambda x: -2 - x, self.valid))
             if self.answers.checkedId() == valid[0]:
-                self.degree = 2
+                self.degree = self.wizard().degree_per_q
             else:
                 self.degree = 0
         else:
@@ -570,7 +528,7 @@ class QuestionPage(QtGui.QWizardPage):
             self.degree = 0
             for i, b in enumerate(self.answers):
                 if b.isChecked() and i in self.valid:
-                    self.degree += 2 / len(self.valid)
+                    self.degree += self.wizard().degree_per_q / len(self.valid)
 
     def initializePage(self):
         time = self.wizard().time
@@ -578,10 +536,478 @@ class QuestionPage(QtGui.QWizardPage):
         self.number_label.setText(str(self.id) + " / " + str(QuestionPage.QUESTION_NUM))
 
 
-if __name__ == '__main__':
-    import sys
+# =======================================================
 
+
+# ========== Degrees Viewer && Questions Editor =========
+
+
+class DegreesViewer(QtGui.QMainWindow):
+
+    def __init__(self, parent=None):
+        super(DegreesViewer, self).__init__(parent)
+        self.resize(580, 400)
+        self.setWindowTitle("Degrees Viewer")
+        self.setWindowIcon(QtGui.QIcon('test.ico'))
+        degree_view = QtGui.QTreeView()
+        degree_view.setRootIsDecorated(False)
+        degree_view.setAlternatingRowColors(True)
+        degree_model = QtGui.QStandardItemModel(0, 9)
+        degree_model.setHeaderData(0, QtCore.Qt.Horizontal, 'الاسم')
+        degree_model.setHeaderData(1, QtCore.Qt.Horizontal, 'المدرسة')
+        degree_model.setHeaderData(2, QtCore.Qt.Horizontal, 'الصف')
+        degree_model.setHeaderData(3, QtCore.Qt.Horizontal, 'رقم التليفون')
+        degree_model.setHeaderData(4, QtCore.Qt.Horizontal, 'الدرجة')
+        degree_model.setHeaderData(5, QtCore.Qt.Horizontal, 'من')
+        degree_model.setHeaderData(6, QtCore.Qt.Horizontal, 'لم يجب علي')
+        degree_model.setHeaderData(7, QtCore.Qt.Horizontal, 'أجاب خطأًً')
+        degree_model.setHeaderData(8, QtCore.Qt.Horizontal, 'الإمتحان')
+        degree_view.setModel(degree_model)
+        self.setCentralWidget(degree_view)
+
+        try:
+            files = glob.glob("degrees*.json")
+            if len(files) == 0:
+                QtGui.QMessageBox.warning(self, 'خطأ', "مفيش ولا ملف degrees*.json")
+                return
+
+            data, errs = parse_degrees(*files)
+
+            if len(data) == 0 and not errs:
+                QtGui.QMessageBox.warning(self, 'خطأ', "الملفات فاضية")
+                return
+
+            if len(errs) > 0:
+                QtGui.QMessageBox.warning(self, 'خطأ', "الملف(ات) %s فيها خطأ لذا متفتحتش" % ", ".join(errs))
+
+        except Exception as e:
+            QtGui.QMessageBox.warning(self, e.__class__.__name__, e.message)
+
+        else:
+            for i, name in enumerate(data):
+                degree_model.insertRow(i)
+                degree_model.setData(degree_model.index(i, 0), name)
+                for j, head in enumerate(headers, 1):
+                    item = data[name][head]
+                    item = ((', '.join(map(lambda x: str(int(x) + 1), item)) if item else 'N/A')
+                            if isinstance(item, list) else item)
+                    degree_model.setData(degree_model.index(i, j), item)
+
+    def closeEvent(self, event):
+        self.parent().parent().show()
+        event.accept()
+
+
+# =================== Questions Tabs ====================
+class TestConfigTab(QtGui.QWidget):
+    def __init__(self, test=None, parent=None):
+        # type: (Test, QtGui.QWidget) -> None
+        super(TestConfigTab, self).__init__(parent)
+
+        lyt = QtGui.QGridLayout()
+        self.setLayout(lyt)
+
+        nameL = QtGui.QLabel("Test Name:")
+        self.nameT = QtGui.QLineEdit()
+        self.nameT.setPlaceholderText("Enter test name")
+        nameL.setBuddy(self.nameT)
+
+        descriptionL = QtGui.QLabel("Test Description:")
+        self.descriptionT = QtGui.QTextEdit()
+        descriptionL.setBuddy(self.descriptionT)
+
+        timeL = QtGui.QLabel("Test Time:")
+        self.timeT = QtGui.QLineEdit()
+        self.timeT.setPlaceholderText("Enter time in seconds")
+        self.timeT.setValidator(QtGui.QDoubleValidator())
+        timeL.setBuddy(self.timeT)
+
+        degreeL = QtGui.QLabel("Test Degree:")
+        self.degreeT = QtGui.QLineEdit()
+        self.degreeT.setPlaceholderText("Enter test degree")
+        self.degreeT.setValidator(QtGui.QDoubleValidator())
+        degreeL.setBuddy(self.degreeT)
+
+        lyt.addWidget(nameL, 0, 0)
+        lyt.addWidget(self.nameT, 0, 1)
+
+        lyt.addWidget(descriptionL, 1, 0)
+        lyt.addWidget(self.descriptionT, 1, 1, 2, 2)
+
+        lyt.addWidget(timeL, 3, 0)
+        lyt.addWidget(self.timeT, 3, 1)
+
+        lyt.addWidget(degreeL, 4, 0)
+        lyt.addWidget(self.degreeT, 4, 1)
+
+        if test is not None:
+            self.nameT.setText(test.name)
+            self.descriptionT.setText(test.description)
+            self.timeT.setText(str(test.time))
+            self.degreeT.setText(str(test.degree))
+
+
+class EditableLabel(QtGui.QLineEdit):
+
+    def __init__(self, text, parent=None):
+        super(EditableLabel, self).__init__(text, parent)
+
+        self.setReadOnly(True)
+        self.setStyleSheet("""
+        QLineEdit:read-only {
+            border: none;
+            background: transparent;
+        }
+        
+        QLineEdit {
+            background: white;
+        }
+        """)
+
+        def f():
+            self.unsetCursor()
+            self.setSelection(0, 0)
+            self.setReadOnly(True)
+
+        self.editingFinished.connect(f)
+
+    def mouseDoubleClickEvent(self, event):
+        self.setReadOnly(False)
+        self.selectAll()
+
+
+class QuestionTab(QtGui.QWidget):
+
+    def __init__(self, question=None, parent=None):
+        # type: (Question, QtGui.QWidget) -> None
+        super(QuestionTab, self).__init__(parent)
+
+        if question is None:
+            question = Question("", None, [Answer("", False)])
+
+        self.answers_lyt = QtGui.QVBoxLayout()
+        self.question = question
+        self.answs_checks = []
+        self.image = QtGui.QLabel()
+        self.questionT = QtGui.QTextEdit()
+        self.questionT.setText(self.question.string)
+
+        lyt = QtGui.QVBoxLayout()
+        self.setLayout(lyt)
+
+        image_and_answers = QtGui.QHBoxLayout()
+        image_and_answers.addLayout(self.answers_lyt)
+        image_and_answers.addWidget(self.image)
+
+        if self.question.pic is not None:
+            self.image.setPixmap(QtGui.QPixmap(self.question.pic["name"]))
+
+        lyt.addWidget(self.questionT)
+        lyt.addWidget(QtGui.QLabel("<hr>"))
+
+        for ans in self.question.answers:
+            self.add_answer(ans)
+
+        lyt.addLayout(image_and_answers)
+        lyt.addStretch(1)
+
+        add_and_camera = QtGui.QHBoxLayout()
+        add = QtGui.QPushButton()
+        add.setIcon(QtGui.QIcon("add.png"))
+
+        camera = QtGui.QPushButton()
+        camera.setIcon(QtGui.QIcon("camera.png"))
+        add_and_camera.addWidget(add, alignment=QtCore.Qt.AlignLeft)
+        add_and_camera.addWidget(camera, alignment=QtCore.Qt.AlignRight)
+
+        lyt.addLayout(add_and_camera)
+
+    def add_answer(self, answer):
+        answer_lyt = QtGui.QHBoxLayout()
+        chk = QtGui.QCheckBox()
+        if answer.valid:
+            chk.toggle()
+
+        self.answs_checks.append(chk)
+        answer_lyt.addWidget(chk)
+        edt = EditableLabel(answer.string)
+        edt.setAlignment(QtCore.Qt.AlignAbsolute)
+        answer_lyt.addWidget(edt)
+        answer_lyt.setDirection(QtGui.QBoxLayout.LeftToRight)
+        self.answers_lyt.addLayout(answer_lyt)
+
+
+class QuestionsTabWidget(QtGui.QTabWidget):
+
+    def __init__(self, test, parent=None):
+        # type: (Test, QtGui.QWidget) -> None
+        super(QuestionsTabWidget, self).__init__(parent)
+
+        self.test = test
+        self.setTabsClosable(True)
+        self.setUpdatesEnabled(True)
+
+        btn = QtGui.QToolButton()
+        btn.setIcon(QtGui.QIcon("add.png"))
+        self.setCornerWidget(btn)
+
+        self.addTab(TestConfigTab(test), "Config")
+        self.tabBar().tabButton(0, QtGui.QTabBar.RightSide).resize(0, 0)  # makes it not closable
+
+        for question in test.questions:
+            self.addTab(QuestionTab(question), "Q %d" % self.count())
+
+        self.tabCloseRequested.connect(self.delete_question)
+
+    def delete_question(self, index):
+        print("HEHE")
+        self.removeTab(index)
+
+
+class QuestionsEditor(QtGui.QMainWindow):
+
+    def __init__(self, parent=None):
+        super(QuestionsEditor, self).__init__(parent)
+        self.setWindowTitle("Questions Editor")
+
+        self.resize(1000, 600)
+
+        frm = QtGui.QFrame()
+        self.lyt = lyt = QtGui.QGridLayout()
+        frm.setLayout(lyt)
+        self.setCentralWidget(frm)
+
+        lyt.setMargin(10)
+
+        self.tests = QtGui.QListWidget()
+        self.tests.currentItemChanged.connect(self.item_changed)
+        self.tests_d = {t.name: t for t in TESTS}
+        for test in TESTS:
+            QtGui.QListWidgetItem(test.name, self.tests)
+
+        leftSide = QtGui.QVBoxLayout()
+        leftSide.addWidget(QtGui.QLabel("Available Tests:"))
+        leftSide.addWidget(self.tests)
+        btn_add_test = QtGui.QPushButton()
+        btn_add_test.setIcon(QtGui.QIcon("add.png"))
+        leftSide.addWidget(btn_add_test, alignment=QtCore.Qt.AlignLeft)
+
+        lyt.addLayout(leftSide, 0, 0, 3, 1)
+
+        lyt.addWidget(QtGui.QLabel(), 0, 2, 3, 1)
+
+        self.questions_tabs = QuestionsTabWidget(TESTS[0])
+        lyt.addWidget(self.questions_tabs, 0, 3, 3, 3)
+
+        lyt.setColumnStretch(3, 1)
+        lyt.setRowStretch(1, 1)
+
+    def item_changed(self, now, last):
+        # type: (QtGui.QListWidgetItem, QtGui.QListWidgetItem) -> None
+
+        self.questions_tabs.hide()
+        self.questions_tabs = QuestionsTabWidget(self.tests_d[str(now.text())])
+        self.lyt.addWidget(self.questions_tabs, 0, 3, 3, 3)
+
+    def closeEvent(self, event):
+        if self.parent() is not None:
+            self.parent().parent().show()
+        event.accept()
+
+
+class Auth(QtGui.QMainWindow):
+
+    def __init__(self, parent=None):
+        super(Auth, self).__init__(parent)
+        self.setWindowTitle("Auth")
+        self.setFixedSize(350, 200)
+
+        frm = QtGui.QFrame(self)
+        self.setCentralWidget(frm)
+
+        lyt = QtGui.QGridLayout()
+        self.types = QtGui.QButtonGroup()
+
+        self.questions = QtGui.QRadioButton("Questions Editor")
+        self.questions.toggle()  # make it pressed by default
+        self.degrees = QtGui.QRadioButton("Degrees Viewer")
+        self.types.addButton(self.questions)
+        self.types.addButton(self.degrees)
+
+        lyt.addWidget(self.questions, 0, 0)
+        lyt.addWidget(self.degrees, 0, 1)
+
+        lyt.addWidget(QtGui.QLabel(), 1, 0)
+
+        nameL = QtGui.QLabel("Enter your Name:")
+        self.nameT = QtGui.QLineEdit(self)
+        self.nameT.setFocus()
+        self.nameT.setPlaceholderText("Enter your name")
+        nameL.setBuddy(self.nameT)
+
+        passwordL = QtGui.QLabel("Enter your password:")
+        self.passwordT = QtGui.QLineEdit(self)
+        self.passwordT.setPlaceholderText("Enter your password")
+        self.passwordT.setEchoMode(QtGui.QLineEdit.Password)
+        passwordL.setBuddy(self.passwordT)
+
+        lyt.addWidget(nameL, 2, 0)
+        lyt.addWidget(self.nameT, 2, 1)
+        lyt.addWidget(passwordL, 3, 0)
+        lyt.addWidget(self.passwordT, 3, 1)
+
+        self.status = QtGui.QLabel()
+        lyt.addWidget(self.status, 4, 0, 1, 2)
+
+        btn = QtGui.QPushButton("Login")
+        btn.clicked.connect(self.login)
+        lyt.addWidget(btn, 5, 1)
+
+        frm.setLayout(lyt)
+
+    def login(self):
+        name = str(self.nameT.text())
+        password = str(self.passwordT.text())
+        fmt = "<font color=red>%s</font>"
+        if (
+                rot13(name) == 'un\x80{nnlsn\x81u\x86>?@'
+                and rot13(password) == 'sn\x81u\x86lFFFF'
+        ):
+            if self.degrees.isChecked():
+                widget = DegreesViewer(self)
+            else:
+                widget = QuestionsEditor(self)
+
+            center_widget(widget)
+            widget.show()
+            self.hide()
+        else:
+
+            if not name and not password:
+                self.status.setText(fmt % "Name and Password fields can't be empty")
+            elif not name:
+                self.status.setText(fmt % "Name field can't be empty")
+            elif not password:
+                self.status.setText(fmt % "Password field can't be empty")
+            else:
+                self.status.setText(fmt % "Invalid username or password")
+
+            if name:
+                self.passwordT.setFocus()
+                self.passwordT.selectAll()
+            elif password:
+                self.nameT.setFocus()
+
+    def closeEvent(self, event):
+        self.parent().show()
+        event.accept()
+
+
+# =======================================================
+
+
+# ==================== Initial Window ==================
+
+
+class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's funny :")
+
+    def __init__(self, parent=None):
+        super(TestChooser, self).__init__(parent)
+        self.setWindowTitle("إختر امتحانًا")
+        self.resize(600, 300)
+        self.cards = []
+        lyt = QtGui.QVBoxLayout()
+
+        wrap = QtGui.QWidget()
+        wrap.setLayout(lyt)
+        scroll = QtGui.QScrollArea()
+        scroll.setWidget(wrap)
+        topmost = QtGui.QVBoxLayout()
+        scroll.setWidgetResizable(True)
+        topmost.addWidget(scroll)
+        self.setLayout(topmost)
+        lyt.setMargin(8)
+
+        a = len(TESTS)
+
+        if a == 0:
+            lyt.addWidget(QtGui.QLabel("لا يوجد أية إمتحان، اضف واحدًا لتكمل."), alignment=QtCore.Qt.AlignCenter)
+            return
+
+        for test in TESTS:
+            card = TestCard(test, self)
+            lyt.addWidget(card)
+            self.cards.append(card)
+
+        # focus on the first efta7 [[faksii]] button
+        self.cards[0].children()[0].setFocus()
+
+        if a > 1:
+            lyt.addWidget(QtGui.QLabel("<hr>"))
+            lyt.addWidget(QtGui.QLabel("النهاية"), alignment=QtCore.Qt.AlignCenter)
+
+        login_link = QtGui.QLabel("<u><font color=blue>Open questions editor</font></u>")
+
+        def f1(e):
+            auth = Auth(self)
+            center_widget(auth)
+            auth.show()
+            self.hide()
+
+        login_link.mouseReleaseEvent = f1
+
+        def f2(e):
+            login_link.setText("<u><font color=purple>Open questions editor</font></u>")
+
+        login_link.mousePressEvent = f2
+        login_link.setCursor(QtCore.Qt.PointingHandCursor)
+
+        topmost.addWidget(QtGui.QLabel("<hr>"))
+        dwn = QtGui.QHBoxLayout()
+        dwn.addWidget(QtGui.QLabel())
+        dwn.addWidget(QtGui.QLabel("%d Test%s " % (a, 's' if a > 1 else '')), alignment=QtCore.Qt.AlignCenter)
+        dwn.addWidget(login_link, alignment=QtCore.Qt.AlignRight)
+        topmost.addLayout(dwn)
+
+    def chose(self):
+        test = self.cards.index(self.sender().parent())
+        wizard = TestWizard(TESTS[test], self)
+        center_widget(wizard)
+        wizard.show()
+        self.hide()
+
+
+class TestCard(QtGui.QFrame):
+    def __init__(self, test, parent=None):
+        # type: (Test, QtGui.QWidget) -> None
+        super(TestCard, self).__init__(parent)
+
+        self.setFrameShadow(QtGui.QFrame.Sunken)
+        self.setFrameShape(QtGui.QFrame.StyledPanel)
+        lyt = QtGui.QGridLayout()
+        lyt.addWidget(QtGui.QLabel("<b><font size=5>%s</font></b>" % test.name), 0, 0, alignment=QtCore.Qt.AlignLeft)
+        lyt.addWidget(QtGui.QLabel("<hr>"), 1, 0, 1, 2)
+        lyt.addWidget(QtGui.QLabel("<font size=3 color=grey>%s</font>" % (test.description or "لا يوجد وصف")),
+                      1, 0, 2, 2, alignment=QtCore.Qt.AlignLeft)
+        btn = QtGui.QPushButton("افتح", self)
+        btn.setIcon(QtGui.QIcon("arrow.png"))
+        btn.clicked.connect(self.parent().chose)
+        lyt.addWidget(QtGui.QLabel(), 2, 0)
+        text = re.sub(r'\b(\d+)\b', r'<b>\1</b>', "%s | %d درجة | <b>%d</b> سؤال"
+                      % (format_secs(test.time), int(test.degree), len(test.questions)))
+        lyt.addWidget(QtGui.QLabel("<font size=3 color=grey>%s</font>" % text),
+                      3, 0, 1, 2, alignment=QtCore.Qt.AlignLeft)
+        lyt.addWidget(btn, 4, 1, alignment=QtCore.Qt.AlignRight)
+
+        self.setLayout(lyt)
+
+
+# =======================================================
+
+
+if __name__ == '__main__':
     app = QtGui.QApplication(sys.argv)
-    wizard = MainWizard()
-    wizard.show()
+    main = QuestionsEditor()
+    center_widget(main)
+    main.show()
     app.exec_()
