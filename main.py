@@ -5,11 +5,10 @@
 :link: https://github.com/faddyy
 """
 
-from __future__ import (absolute_import, division,
-                        print_function, unicode_literals)
-
+import base64
 import datetime
 import glob
+import hashlib
 import json
 import os
 import random
@@ -18,15 +17,17 @@ import sys
 from collections import namedtuple
 
 from PyQt4 import QtGui, QtCore
+from cryptography.fernet import Fernet
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from typing import List, Dict, Union, Tuple
 
-# ================= Compatibility ======================
-if sys.version_info[0] < 3:
-    str = unicode
-    chr = unichr
-    range = xrange
+# it's just used to make the garbage collector not delete the window reference
+CURRENT_ACTIVE = [None]
 
-# =======================================================
+IMAGES_PATH = os.path.join(".", "res", "images")
+DATA_PATH = os.path.join(".", "res", "state")
 
 headers = ['school',
            'grade',
@@ -46,14 +47,12 @@ Test = namedtuple("Test", "name description time questions degree")
 
 # =======================================================
 
-
 # =================== Util Functions ====================
-def parse_tests(file_name):
-    # type: (str) -> List[Test]
+def parse_tests(infile: str, encrypted=False) -> List[Test]:
+    with open(infile, "rb") if encrypted else open(infile, encoding="utf8") as f:
+        data = Encryptor.decrypt(f.read()) if encrypted else f.read()
 
-    with open(file_name) as f:
-        tests = json.load(f)
-
+    tests = json.loads(data, encoding="utf8")
     test_list = []
     for test in tests:
         name = test
@@ -66,17 +65,15 @@ def parse_tests(file_name):
     return test_list
 
 
-def parse_degrees(*args):
-    # type: (*str) -> Tuple[Dict[str, Dict[str, Union[float, int, str]]], List[str]]
-
-    assert not args
+def parse_degrees(*args: str, encrypted=False) -> Tuple[Dict[str, Dict[str, Union[float, int, str]]], List[str]]:
+    assert args
 
     data = {}
     errs = []
     err = False
     for fn in args:
-        with open(fn) as f:
-            d = json.load(f)
+        with open(fn, "rb") if encrypted else open(fn, encoding="utf8") as f:
+            d = json.loads(Encryptor.decrypt(f.read()) if encrypted else f.read(), encoding="utf8")
             for j in d.values():
                 if len(set(j.keys()) & set(headers)) < len(headers):
                     errs.append(fn)
@@ -92,25 +89,66 @@ def parse_degrees(*args):
     return data, errs
 
 
-def center_widget(widget):
-    # type: (QtGui.QWidget) -> None
+def center_widget(widget: QtGui.QWidget) -> None:
     widget.move(QtGui.QApplication.desktop().screen().rect().center() - widget.rect().center())
 
 
-def rot13(string):
-    # type: (str) -> str
-    return "".join(map(lambda c: chr(ord(c) + 13), list(string)))
-
-
-def format_secs(seconds, sp=("ساعة", "دقيقة", "ثانية"), sep="، "):
+def format_secs(seconds: str, sp=("ساعة", "دقيقة", "ثانية"), sep="، ") -> str:
     return sep.join(["%d %s" % (int(d), s) for d, s in zip(str(datetime.timedelta(seconds=seconds)).split(':'), sp)
                      if not int(d) == 0])
 
 
+def _res(name: str, kind="image") -> str:
+    assert kind in ("image", "icon", "state")
+
+    if kind == "image":
+        return os.path.join('.', IMAGES_PATH, "images", name)
+    elif kind == "icon":
+        return os.path.join('.', IMAGES_PATH, "icos", name)
+    else:
+        return os.path.join('.', DATA_PATH, name)
+
+
 # =======================================================
 
+# ====================== Encryption =====================
 
-TESTS = parse_tests("tests.json")
+class Encryptor(object):
+    p = base64.b64decode(b'ZnVja3k0MmZ1bmt5NDJmdWM0Mmtpbmc0MndvcmxkNDI=')
+
+    @staticmethod
+    def encrypt(string: str) -> bytes:
+        s = os.urandom(16)
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=s,
+            iterations=100000,
+            backend=default_backend()
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(Encryptor.p))
+        fer = Fernet(key)
+        return s + fer.encrypt(string.encode())
+
+    @staticmethod
+    def decrypt(data: bytes) -> str:
+        s = data[:16]
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=s,
+            iterations=100000,
+            backend=default_backend()
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(Encryptor.p))
+        fer = Fernet(key)
+        return fer.decrypt(data[16:]).decode()
+
+
+# ========================================================
+
+
+TESTS = parse_tests(_res("tests.enc", "state"), encrypted=True)
 questions = [Question("sad", None, [Answer("YES!!", False)] * 3)] * 3
 TESTS.extend([Test("Hey", "you!", 5000, questions, 3), Test("Hello", "asda", 2200, questions, 3),
               Test("How", "are you?", 2705, questions, 5)])
@@ -125,6 +163,7 @@ class TestWizard(QtGui.QWizard):
         # type: (Test, QtGui.QWidget) -> None
         super(TestWizard, self).__init__(parent)
         self.test = test
+        self.parent_window = None
         self.degree_per_q = self.test.degree / len(self.test.questions)
         self.setButtonText(self.NextButton, 'التالي >')
         self.setButtonText(self.CancelButton, 'الغاء')
@@ -136,7 +175,6 @@ class TestWizard(QtGui.QWizard):
         self.setWizardStyle(QtGui.QWizard.ClassicStyle)
         self.setWindowTitle(self.test.name)
         self.setMinimumSize(480, 380)
-        self.setWindowIcon(QtGui.QIcon("data/test.ico"))
 
         self.resize(720, 540)
 
@@ -239,14 +277,13 @@ class TestWizard(QtGui.QWizard):
             if isinstance(p, QuestionPage):
                 self.degrees.append(p.degree)
 
-    def closeEvent(self, event):
-        # type: (QtGui.QCloseEvent) -> None
+    def closeEvent(self, event: QtGui.QCloseEvent):
         if not self.pageIds()[-1] > self.currentId() > 0:
-            self.parent().show()
+            self.parent_window.show()
             event.accept()
         elif (QtGui.QMessageBox.question(self, "هل انت متأكد؟", "انت علي وشك ان تغلق النافذة، كل الإجابات سوف تنسي.",
                                          QtGui.QMessageBox.Yes | QtGui.QMessageBox.No)) == QtGui.QMessageBox.Yes:
-            self.parent().show()
+            self.parent_window.show()
             event.accept()
         else:
             event.ignore()
@@ -327,7 +364,7 @@ class FormPage(QtGui.QWizardPage):
 
     def validatePage(self):
 
-        if len(self.nameedit.text().simplified().split(" ")) < 2:
+        if len(self.nameedit.text().split(" ")) < 2:
             QtGui.QMessageBox.information(self, "خطأ في الاسم", 'يرجي ادخال الاسم ثنائيا او اكثر')
         elif self.gradecombo.currentText() == "<ادخل صفك>":
             QtGui.QMessageBox.information(self, "خطأ في الصف", 'يرجي ادخال الصف')
@@ -337,106 +374,9 @@ class FormPage(QtGui.QWizardPage):
         return False
 
 
-# class FinalPage(QtGui.QWizardPage):
-#     def __init__(self, parent=None):
-#         super(FinalPage, self).__init__(parent)
-#         my_layout = QtGui.QGridLayout()
-#         details_group = QtGui.QGroupBox()
-#         details_layout = QtGui.QGridLayout()
-#         details_group.setTitle("البيانات")
-#         self.nameL = QtGui.QLabel()
-#         self.schoolL = QtGui.QLabel()
-#         self.gradeL = QtGui.QLabel()
-#         self.numberL = QtGui.QLabel()
-#         details_layout.addWidget(self.nameL, 0, 0)
-#         details_layout.addWidget(self.schoolL, 1, 0)
-#         details_layout.addWidget(self.gradeL, 2, 0)
-#         details_layout.addWidget(self.numberL, 3, 0)
-#
-#         details_layout.addWidget(QtGui.QLabel("الاسم: "), 0, 1)
-#         details_layout.addWidget(QtGui.QLabel("المدرسة: "), 1, 1)
-#         details_layout.addWidget(QtGui.QLabel("الصف: "), 2, 1)
-#         details_layout.addWidget(QtGui.QLabel("رقم التليفون: "), 3, 1)
-#
-#         details_group.setLayout(details_layout)
-#         my_layout.addWidget(details_group, 2, 1)
-#         my_layout.addItem(QtGui.QSpacerItem(20, 40, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding), 0, 0, 2, 2)
-#
-#         degree_view = QtGui.QTreeView()
-#         degree_view.setRootIsDecorated(False)
-#         degree_view.setAlternatingRowColors(True)
-#         degree_view.setEnabled(False)
-#
-#         self.degree_model = QtGui.QStandardItemModel(0, 3)
-#         self.degree_model.setHeaderData(0, QtCore.Qt.Horizontal, "درجة السؤال الواحد")
-#         self.degree_model.setHeaderData(1, QtCore.Qt.Horizontal, "المجموع")
-#         self.degree_model.setHeaderData(2, QtCore.Qt.Horizontal, "الدرجة")
-#         degree_view.setModel(self.degree_model)
-#         my_layout.addWidget(degree_view, 2, 0)
-#
-#         self.setLayout(my_layout)
-#
-#     def initializePage(self):
-#
-#         degrees = self.wizard().degrees
-#         test = self.wizard().test
-#         name = self.field("name").toString()
-#         school = self.field("school").toString()
-#         grade = FormPage.GRADES[self.field("grade").toInt()[0] - 1]
-#         number = self.field("number").toString()
-#         sum_of_degrees = sum(i for i in degrees if i != -1)
-#
-#         if number.startsWith("01") and len(number) == 11:
-#             number = "+2" + number
-#
-#         self.nameL.setText(name)
-#         self.schoolL.setText(school)
-#         self.gradeL.setText(grade)
-#         self.numberL.setText(number)
-#
-#         vm = self.degree_model
-#         vm.insertRow(0)
-#         vm.setData(vm.index(0, 0), self.wizard().degree_per_q)
-#         vm.setData(vm.index(0, 1), test.degree)
-#         vm.setData(vm.index(0, 2), sum_of_degrees)
-#
-#         failed_at = []
-#         left = []
-#         for i, v in enumerate(degrees):
-#             if v == 0:
-#                 failed_at.append(i)
-#             elif v == -1:
-#                 left.append(i)
-#
-#         user = dict(zip(headers, [str(school),
-#                                   str(grade),
-#                                   str(number),
-#                                   sum_of_degrees,
-#                                   test.degree,
-#                                   left,
-#                                   failed_at,
-#                                   test.name,
-#                                   ]))
-#
-#         if not os.path.exists("degrees.json"):
-#             with open("degrees.json", "w") as f:
-#                 f.write("{}")
-#
-#         with open("degrees.json", "r") as f:
-#             try:
-#                 data = json.load(f)
-#             except ValueError as e:
-#                 print("error" + str(e))
-#                 data = {}
-#
-#         with open("degrees.json", "w") as f:
-#             data[str(name)] = user
-#             json.dump(data, f)
-
 class FinalPage(QtGui.QWizardPage):
-
     class ColorBox(QtGui.QWidget):
-        def __init__(self, color, description, parent=None):
+        def __init__(self, color: str, description: str, parent=None):
             super(FinalPage.ColorBox, self).__init__(parent)
             lyt = QtGui.QHBoxLayout()
             self.setLayout(lyt)
@@ -494,13 +434,13 @@ class FinalPage(QtGui.QWizardPage):
     def initializePage(self):
         degrees = self.wizard().degrees
         test = self.wizard().test
-        name = self.field("name").toString()
-        school = self.field("school").toString()
-        grade = FormPage.GRADES[self.field("grade").toInt()[0] - 1]
-        number = self.field("number").toString()
+        name = self.field("name")
+        school = self.field("school")
+        grade = FormPage.GRADES[int(self.field("grade")) - 1]
+        number = self.field("number")
         sum_of_degrees = sum(i for i in degrees if i != -1)
 
-        if number.startsWith("01") and len(number) == 11:
+        if number.startswith("01") and len(number) == 11:
             number = "+2" + number
 
         self.nameL.setText(name)
@@ -516,9 +456,9 @@ class FinalPage(QtGui.QWizardPage):
             elif v == -1:
                 left.append(i)
 
-        user = dict(zip(headers, [str(school),
-                                  str(grade),
-                                  str(number),
+        user = dict(zip(headers, [school,
+                                  grade,
+                                  number,
                                   sum_of_degrees,
                                   test.degree,
                                   left,
@@ -532,7 +472,6 @@ class FinalPage(QtGui.QWizardPage):
         colors = [QtGui.QColor(128, 128, 128), QtGui.QColor(255, 0, 0), QtGui.QColor(0, 128, 0)]
         scene = QtGui.QGraphicsScene()
         for i, piece in enumerate(pieces):
-            # Max span is 5760, so we have to calculate corresponding span angle
             angle = round(float(piece * 5760) / total)
             ellipse = QtGui.QGraphicsEllipseItem(0, 0, 400, 400)
             ellipse.setPos(0, 0)
@@ -546,12 +485,26 @@ class FinalPage(QtGui.QWizardPage):
         view.setStyleSheet("background-color: transparent")
         self.lyt.insertWidget(0, view)
 
+        if not os.path.exists("degrees.json"):
+            with open("degrees.json", "w") as f:
+                f.write("{}")
+
+        with open("degrees.json", "r") as f:
+            try:
+                data = json.load(f)
+            except ValueError as e:
+                print("error" + str(e))
+                data = {}
+
+        with open("degrees.json", "w") as f:
+            data[name] = user
+            json.dump(data, f)
+
 
 class QuestionPage(QtGui.QWizardPage):
     QUESTION_NUM = 0
 
-    def __init__(self, question, parent=None):
-        # type: (Question, QtGui.QWidget) -> None
+    def __init__(self, question: Question, parent=None):
 
         super(QuestionPage, self).__init__(parent)
         QuestionPage.QUESTION_NUM += 1
@@ -591,7 +544,7 @@ class QuestionPage(QtGui.QWizardPage):
         self.pic = QtGui.QLabel()
         my_layout.addWidget(self.pic)
         if question.pic:
-            self.pic.setPixmap(QtGui.QPixmap(question.pic))
+            self.pic.setPixmap(QtGui.QPixmap(_res(question.pic)))
 
         self.lcdScreen = QtGui.QLCDNumber()
         self.lcdScreen.setSegmentStyle(QtGui.QLCDNumber.Flat)
@@ -659,7 +612,7 @@ class QuestionPage(QtGui.QWizardPage):
 
 
 class EditableLabel(QtGui.QLineEdit):
-    def __init__(self, text, parent=None):
+    def __init__(self, text: str, parent=None):
         super(EditableLabel, self).__init__(text, parent)
 
         self.setReadOnly(True)
@@ -687,7 +640,7 @@ class EditableLabel(QtGui.QLineEdit):
 
 
 class IconButton(QtGui.QLabel):
-    def __init__(self, icon, index):
+    def __init__(self, index, icon: QtGui.QPixmap):
         super(IconButton, self).__init__()
 
         self.icon = icon
@@ -714,16 +667,16 @@ class IconButton(QtGui.QLabel):
 
 
 class QuestionImage(QtGui.QFrame):
-    def __init__(self, image=None, parent=None):
+    def __init__(self, image: str = None, parent=None):
         super(QuestionImage, self).__init__(parent)
 
         lyt = QtGui.QGridLayout()
         self.setLayout(lyt)
-        self.close_btn = IconButton(QtGui.QPixmap("cancel_red.png"), -1)
+        self.close_btn = IconButton(-1, QtGui.QPixmap(_res("cancel_red.png", "icon")))
         self.close_btn.hide()
         self.close_btn.setToolTip("Remove the Image")
         self.close_btn.clicked.connect(self.hideImage)
-        self.add_btn = IconButton(QtGui.QPixmap("plus_green.png"), -1)
+        self.add_btn = IconButton(-1, QtGui.QPixmap(_res("plus_green.png", "icon")))
         self.add_btn.clicked.connect(self.choose_image)
         self.add_btn.setToolTip("Add an Image")
         self.lbl = QtGui.QLabel("<font size=10>Insert an Image</font>")
@@ -737,7 +690,7 @@ class QuestionImage(QtGui.QFrame):
         if image is not None:
             self.setImage(image)
 
-    def setImage(self, image):
+    def setImage(self, image: str):
         assert image
 
         self.imageShown.emit()
@@ -774,7 +727,7 @@ class QuestionImage(QtGui.QFrame):
 
 
 class AnswerWidget(QtGui.QWidget):
-    def __init__(self, answer, index, last=False, parent=None):
+    def __init__(self, answer: Answer, index: int, last=False, parent: QtGui.QWidget = None):
         QtGui.QWidget.__init__(self, parent)
 
         self._last = last
@@ -782,8 +735,8 @@ class AnswerWidget(QtGui.QWidget):
 
         lyt = QtGui.QHBoxLayout()
 
-        self.add_pixmap = QtGui.QPixmap("plus_green.png")
-        self.remove_pixmap = QtGui.QPixmap("cancel_red.png")
+        self.add_pixmap = QtGui.QPixmap(_res("plus_green.png", "icon"))
+        self.remove_pixmap = QtGui.QPixmap(_res("cancel_red.png", "icon"))
 
         self.setLayout(lyt)
         chk = QtGui.QCheckBox()
@@ -799,11 +752,11 @@ class AnswerWidget(QtGui.QWidget):
         edt.setAlignment(QtCore.Qt.AlignAbsolute)
         lyt.addWidget(edt)
         if last:
-            self.mod = mod = IconButton(self.add_pixmap, self.index)
+            self.mod = mod = IconButton(self.index, self.add_pixmap)
             mod.clicked.connect(lambda: self.addRequest.emit(self.index))
             mod.setToolTip("Add an Answer")
         else:
-            self.mod = mod = IconButton(self.remove_pixmap, self.index)
+            self.mod = mod = IconButton(self.index, self.remove_pixmap)
             mod.clicked.connect(lambda: self.deleteRequest.emit(self.index))
             mod.setToolTip("Delete this Answer")
         mod.setObjectName("mod")
@@ -819,18 +772,18 @@ class AnswerWidget(QtGui.QWidget):
         self._last = value
         self.mod.deleteLater()
         if value:
-            self.mod = IconButton(self.add_pixmap, self.index)
+            self.mod = IconButton(self.index, self.add_pixmap)
             self.mod.clicked.connect(lambda: self.addRequest.emit(self.index))
             self.mod.setToolTip("Add an Answer")
         else:
-            self.mod = IconButton(self.remove_pixmap, self.index)
+            self.mod = IconButton(self.index, self.remove_pixmap)
             self.mod.clicked.connect(lambda: self.deleteRequest.emit(self.index))
             self.mod.setToolTip("Delete this Answer")
 
         self.layout().addWidget(self.mod)
 
-    def observe_text(self, s):
-        if s.isEmpty():
+    def observe_text(self, s: str) -> None:
+        if s == "":
             self.isEmpty.emit(self.index)
         else:
             self.filled.emit(self.index)
@@ -851,7 +804,9 @@ class DegreesViewer(QtGui.QMainWindow):
         super(DegreesViewer, self).__init__(parent)
         self.resize(580, 400)
         self.setWindowTitle("Degrees Viewer")
-        self.setWindowIcon(QtGui.QIcon('test.ico'))
+
+        self.parent_window = None
+
         degree_view = QtGui.QTreeView()
         degree_view.setRootIsDecorated(False)
         degree_view.setAlternatingRowColors(True)
@@ -869,12 +824,12 @@ class DegreesViewer(QtGui.QMainWindow):
         self.setCentralWidget(degree_view)
 
         try:
-            files = glob.glob("degrees*.json")
+            files = glob.glob(os.path.join(DATA_PATH, "degrees*.enc"))
             if len(files) == 0:
-                QtGui.QMessageBox.warning(self, 'خطأ', "مفيش ولا ملف degrees*.json")
+                QtGui.QMessageBox.warning(self, 'خطأ', "مفيش ولا ملف degrees*.enc")
                 return
 
-            data, errs = parse_degrees(*files)
+            data, errs = parse_degrees(*files, encrypted=True)
 
             if len(data) == 0 and not errs:
                 QtGui.QMessageBox.warning(self, 'خطأ', "الملفات فاضية")
@@ -884,7 +839,7 @@ class DegreesViewer(QtGui.QMainWindow):
                 QtGui.QMessageBox.warning(self, 'خطأ', "الملف(ات) %s فيها خطأ لذا متفتحتش" % ", ".join(errs))
 
         except Exception as e:
-            QtGui.QMessageBox.warning(self, e.__class__.__name__, e.message)
+            QtGui.QMessageBox.warning(self, e.__class__.__name__, str(e))
 
         else:
             for i, name in enumerate(data):
@@ -897,7 +852,8 @@ class DegreesViewer(QtGui.QMainWindow):
                     degree_model.setData(degree_model.index(i, j), item)
 
     def closeEvent(self, event):
-        self.parent().parent().show()
+        if self.parent_window is not None:
+            self.parent_window.parent_window.show()
         event.accept()
 
 
@@ -963,6 +919,9 @@ class TestDetails(QtGui.QWidget):
             self.timeT.setText(str(test.time))
             self.degreeT.setText(str(test.degree))
 
+    isEmpty = QtCore.pyqtSignal(str, name="isEmpty")
+    nameChanged = QtCore.pyqtSignal(str, name="nameChanged")
+
     def empty(self, s):
         parent = self.parent()
         if not (self.nameT.text() and self.timeT.text() and self.degreeT.text()):
@@ -998,15 +957,15 @@ class TestDetails(QtGui.QWidget):
         questions_editor = self.parent().parent().parent().parent()  # type: QuestionsEditor
         item = questions_editor.tests.currentItem()  # type: QtGui.QListWidgetItem
 
-        txt = str(item.text())
+        txt = item.text()
 
-        questions_editor._cache[str(self.nameT.text())] = questions_editor._cache.pop(txt)
+        questions_editor._cache[self.nameT.text()] = questions_editor._cache.pop(txt)
 
         item.setText(self.nameT.text())
 
     def get_test(self):
         # type: () -> Test
-        return Test(str(self.nameT.text()), str(self.descriptionT.toPlainText()),
+        return Test(self.nameT.text(), self.descriptionT.toPlainText(),
                     float(self.timeT.text()), [], float(self.degreeT.text()))
 
 
@@ -1143,7 +1102,7 @@ class QuestionsTabWidget(QtGui.QTabWidget):
         self.setMovable(True)
 
         btn = QtGui.QToolButton()
-        btn.setIcon(QtGui.QIcon("add.png"))
+        btn.setIcon(QtGui.QIcon(_res("add.png", "icon")))
         btn.clicked.connect(self.add_question)
         self.setCornerWidget(btn)
 
@@ -1223,6 +1182,7 @@ class QuestionsEditor(QtGui.QMainWindow):
 
         self.resize(1000, 600)
         self._cache = {}
+        self.parent_window = None
 
         frm = QtGui.QFrame()
         self.lyt = lyt = QtGui.QGridLayout()
@@ -1242,12 +1202,12 @@ class QuestionsEditor(QtGui.QMainWindow):
         leftSide.addWidget(self.tests)
         self.btn_add_test = btn_add_test = QtGui.QPushButton()
         btn_add_test.setToolTip("Add a new test")
-        btn_add_test.setIcon(QtGui.QIcon("add.png"))
+        btn_add_test.setIcon(QtGui.QIcon(_res("add.png", "icon")))
         btn_add_test.clicked.connect(self.add_test)
 
         self.btn_remove_test = btn_remove_test = QtGui.QPushButton()
         btn_remove_test.setToolTip("Remove selected test")
-        btn_remove_test.setIcon(QtGui.QIcon("minus.png"))
+        btn_remove_test.setIcon(QtGui.QIcon(_res("minus.png", "icon")))
         btn_remove_test.clicked.connect(self.remove_test)
 
         buttons = QtGui.QHBoxLayout()
@@ -1301,14 +1261,14 @@ class QuestionsEditor(QtGui.QMainWindow):
                                                              "<font color=red><b>cannot</b></font> be <font color=red>"
                                                              "<b>undone</b></font>" % self.tests.currentItem().text(),
                                       QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes:
-            del self.tests_d[str(self.tests.currentItem().text())]
-            del self._cache[str(self.tests.currentItem().text())]
+            del self.tests_d[self.tests.currentItem().text()]
+            del self._cache[self.tests.currentItem().text()]
             self.tests.takeItem(self.tests.row(self.tests.currentItem()))
 
     def item_changed(self, now, last):
         # type: (QtGui.QListWidgetItem, QtGui.QListWidgetItem) -> None
 
-        txt = str(now.text())
+        txt = now.text()
         self.questions_tabs.hide()
         if txt not in self._cache:
             self._cache[txt] = self.questions_tabs = QuestionsTabWidget(self.tests_d[txt])
@@ -1318,8 +1278,8 @@ class QuestionsEditor(QtGui.QMainWindow):
             self.questions_tabs.show()
 
     def closeEvent(self, event):
-        if self.parent() is not None:
-            self.parent().parent().show()
+        if self.parent_window is not None:
+            self.parent_window.parent_window.show()
         event.accept()
 
 
@@ -1335,6 +1295,7 @@ class Auth(QtGui.QMainWindow):
         super(Auth, self).__init__(parent)
         self.setWindowTitle("Auth")
         self.setFixedSize(350, 200)
+        self.parent_window = None
 
         frm = QtGui.QFrame(self)
         self.setCentralWidget(frm)
@@ -1380,18 +1341,19 @@ class Auth(QtGui.QMainWindow):
         frm.setLayout(lyt)
 
     def login(self):
-        name = str(self.nameT.text())
-        password = str(self.passwordT.text())
+        name = self.nameT.text()
+        password = self.passwordT.text()
         fmt = "<font color=red>%s</font>"
         if (
-                        rot13(name) == 'un\x80{nnlsn\x81u\x86>?@'
-                and rot13(password) == 'sn\x81u\x86lFFFF'
+                        hashlib.md5(name.encode()).digest() == b'\tM\x84\x1b\x8f\x171\x8bZ\xf6h\xa2\xe7\xde"P'
+                and hashlib.md5(password.encode()).digest() == b'\xec+\xb9B\xd9\xcb>\xc6dh\xe5\xcc=\xfa\x144'
         ):
             if self.degrees.isChecked():
-                widget = DegreesViewer(self)
+                widget = DegreesViewer()
             else:
-                widget = QuestionsEditor(self)
-
+                widget = QuestionsEditor()
+            CURRENT_ACTIVE[0] = widget
+            widget.parent_window = self
             center_widget(widget)
             widget.show()
             self.hide()
@@ -1415,7 +1377,8 @@ class Auth(QtGui.QMainWindow):
                 self.nameT.setFocus()
 
     def closeEvent(self, event):
-        self.parent().show()
+        if self.parent_window is not None:
+            self.parent_window.show()
         event.accept()
 
 
@@ -1458,7 +1421,7 @@ class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's fu
     def __init__(self, parent=None):
         super(TestChooser, self).__init__(parent)
         self.setWindowTitle("إختر امتحانًا")
-        self.setWindowIcon(QtGui.QIcon("test.ico"))
+        self.setWindowIcon(QtGui.QIcon(_res("test.ico", "icon")))
         self.resize(600, 300)
         lyt = QtGui.QVBoxLayout()
 
@@ -1490,9 +1453,11 @@ class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's fu
         login_link = QtGui.QLabel("<u><font color=blue>Open questions editor</font></u>")
 
         def f1(e):
-            auth = Auth(self)
+            auth = Auth()
             center_widget(auth)
+            auth.parent_window = self
             auth.show()
+            CURRENT_ACTIVE[0] = auth
             self.hide()
 
         login_link.mouseReleaseEvent = f1
@@ -1511,7 +1476,9 @@ class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's fu
         topmost.addLayout(dwn)
 
     def chose(self, index):
-        wizard = TestWizard(TESTS[index], self)
+        wizard = TestWizard(TESTS[index])
+        CURRENT_ACTIVE[0] = wizard
+        wizard.parent_window = self
         center_widget(wizard)
         wizard.show()
         self.hide()
@@ -1526,7 +1493,7 @@ if __name__ == '__main__':
     app = QtGui.QApplication(sys.argv)
     app.setApplicationName("Tester")
     app.setApplicationVersion("0.1")
-    app.setWindowIcon(QtGui.QIcon("test.ico"))
+    app.setWindowIcon(QtGui.QIcon(_res("test.ico", "icon")))
     main = TestChooser()
     center_widget(main)
     main.show()
