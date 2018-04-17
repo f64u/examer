@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from typing import List, Dict, Union, Tuple
 
 # it's just used to make the garbage collector not delete the window reference
-CURRENT_ACTIVE = [None]
+CURRENT_ACTIVE = [None]     # type: List[QtGui.QWidget]
 
 IMAGES_PATH = os.path.join(".", "res", "images")
 DATA_PATH = os.path.join(".", "res", "state")
@@ -93,7 +93,7 @@ def center_widget(widget: QtGui.QWidget) -> None:
     widget.move(QtGui.QApplication.desktop().screen().rect().center() - widget.rect().center())
 
 
-def format_secs(seconds: str, sp=("ساعة", "دقيقة", "ثانية"), sep="، ") -> str:
+def format_secs(seconds: int, sp=("ساعة", "دقيقة", "ثانية"), sep="، ") -> str:
     return sep.join(["%d %s" % (int(d), s) for d, s in zip(str(datetime.timedelta(seconds=seconds)).split(':'), sp)
                      if not int(d) == 0])
 
@@ -159,8 +159,7 @@ TESTS.extend([Test("Hey", "you!", 5000, questions, 3), Test("Hello", "asda", 220
 class TestWizard(QtGui.QWizard):
     degrees = []
 
-    def __init__(self, test, parent=None):
-        # type: (Test, QtGui.QWidget) -> None
+    def __init__(self, test: Test, parent: QtGui.QWidget = None):
         super(TestWizard, self).__init__(parent)
         self.test = test
         self.parent_window = None
@@ -640,7 +639,7 @@ class EditableLabel(QtGui.QLineEdit):
 
 
 class IconButton(QtGui.QLabel):
-    def __init__(self, index, icon: QtGui.QPixmap):
+    def __init__(self, icon: QtGui.QPixmap, index: int):
         super(IconButton, self).__init__()
 
         self.icon = icon
@@ -660,10 +659,10 @@ class IconButton(QtGui.QLabel):
         }
         """)
 
-    clicked = QtCore.pyqtSignal(int, name="clicked")
-
     def mouseReleaseEvent(self, event):
         self.clicked.emit(self.index)
+
+    clicked = QtCore.pyqtSignal(int, name="clicked")
 
 
 class QuestionImage(QtGui.QFrame):
@@ -672,11 +671,11 @@ class QuestionImage(QtGui.QFrame):
 
         lyt = QtGui.QGridLayout()
         self.setLayout(lyt)
-        self.close_btn = IconButton(-1, QtGui.QPixmap(_res("cancel_red.png", "icon")))
+        self.close_btn = IconButton(QtGui.QPixmap(_res("cancel_red.png", "icon")), -1)
         self.close_btn.hide()
         self.close_btn.setToolTip("Remove the Image")
         self.close_btn.clicked.connect(self.hideImage)
-        self.add_btn = IconButton(-1, QtGui.QPixmap(_res("plus_green.png", "icon")))
+        self.add_btn = IconButton(QtGui.QPixmap(_res("plus_green.png", "icon")), -1)
         self.add_btn.clicked.connect(self.choose_image)
         self.add_btn.setToolTip("Add an Image")
         self.lbl = QtGui.QLabel("<font size=10>Insert an Image</font>")
@@ -752,11 +751,11 @@ class AnswerWidget(QtGui.QWidget):
         edt.setAlignment(QtCore.Qt.AlignAbsolute)
         lyt.addWidget(edt)
         if last:
-            self.mod = mod = IconButton(self.index, self.add_pixmap)
+            self.mod = mod = IconButton(self.add_pixmap, self.index)
             mod.clicked.connect(lambda: self.addRequest.emit(self.index))
             mod.setToolTip("Add an Answer")
         else:
-            self.mod = mod = IconButton(self.index, self.remove_pixmap)
+            self.mod = mod = IconButton(self.remove_pixmap, self.index)
             mod.clicked.connect(lambda: self.deleteRequest.emit(self.index))
             mod.setToolTip("Delete this Answer")
         mod.setObjectName("mod")
@@ -772,11 +771,11 @@ class AnswerWidget(QtGui.QWidget):
         self._last = value
         self.mod.deleteLater()
         if value:
-            self.mod = IconButton(self.index, self.add_pixmap)
+            self.mod = IconButton(self.add_pixmap, self.index)
             self.mod.clicked.connect(lambda: self.addRequest.emit(self.index))
             self.mod.setToolTip("Add an Answer")
         else:
-            self.mod = IconButton(self.index, self.remove_pixmap)
+            self.mod = IconButton(self.remove_pixmap, self.index)
             self.mod.clicked.connect(lambda: self.deleteRequest.emit(self.index))
             self.mod.setToolTip("Delete this Answer")
 
@@ -893,11 +892,8 @@ class TestDetails(QtGui.QWidget):
 
         self.status = QtGui.QLabel()
 
-        self.nameT.textEdited.connect(self.update_name)
         for e in [self.nameT, self.timeT, self.degreeT]:
-            e.textEdited.connect(self.empty)
-
-        # self.nameT.textChanged.connect(self.update_name)
+            e.textEdited.connect(self.observe_text)
 
         lyt.addWidget(nameL, 0, 0)
         lyt.addWidget(self.nameT, 0, 1)
@@ -919,59 +915,34 @@ class TestDetails(QtGui.QWidget):
             self.timeT.setText(str(test.time))
             self.degreeT.setText(str(test.degree))
 
-    isEmpty = QtCore.pyqtSignal(str, name="isEmpty")
-    nameChanged = QtCore.pyqtSignal(str, name="nameChanged")
-
-    def empty(self, s):
-        parent = self.parent()
+    def observe_text(self, s: str):
         if not (self.nameT.text() and self.timeT.text() and self.degreeT.text()):
             fmt = "<font color=red>%s Can't be empty</font>"
             if not self.nameT.text():
-                fmt %= "Name"
+                t = "Name"
             elif not self.timeT.text():
-                fmt %= "Time"
+                t = "Time"
             else:
-                fmt %= "Degree"
-            self.status.setText(fmt)
-
-            if isinstance(parent, QtGui.QStackedWidget):  # this means it's in the questions editor
-                ques_widg = parent.parent()  # type: QuestionsTabWidget
-                ques_widg.set_editable(False)
-
-            elif isinstance(parent, QtGui.QDialog):
-                parent.buttons.button(QtGui.QDialogButtonBox.Ok).setEnabled(False)
-
+                t = "Degree"
+            self.status.setText(fmt % t)
+            self.isEmpty.emit(t.lower())
         else:
             self.status.setText("")
-            if isinstance(parent, QtGui.QStackedWidget):
-                ques_widg = parent.parent()  # type: QuestionsTabWidget
-                ques_widg.set_editable(True)
-            elif isinstance(parent, QtGui.QDialog):
-                parent.buttons.button(QtGui.QDialogButtonBox.Ok).setDisabled(False)
+            self.filled.emit()
+            if self.sender() == self.nameT:
+                self.nameChanged.emit(s)
 
-    def update_name(self, s):
-        if not isinstance(self.parent(), QtGui.QStackedWidget):
-            return
-
-        # the hell...
-        questions_editor = self.parent().parent().parent().parent()  # type: QuestionsEditor
-        item = questions_editor.tests.currentItem()  # type: QtGui.QListWidgetItem
-
-        txt = item.text()
-
-        questions_editor._cache[self.nameT.text()] = questions_editor._cache.pop(txt)
-
-        item.setText(self.nameT.text())
-
-    def get_test(self):
-        # type: () -> Test
+    def get_test(self) -> Test:
         return Test(self.nameT.text(), self.descriptionT.toPlainText(),
                     float(self.timeT.text()), [], float(self.degreeT.text()))
 
+    isEmpty = QtCore.pyqtSignal(str, name="isEmpty")
+    filled = QtCore.pyqtSignal(name="filled")
+    nameChanged = QtCore.pyqtSignal(str, name="nameChanged")
+
 
 class QuestionTab(QtGui.QWidget):
-    def __init__(self, question=None, parent=None):
-        # type: (Question, QtGui.QWidget) -> None
+    def __init__(self, question: Question = None, parent: QtGui.QWidget = None):
         super(QuestionTab, self).__init__(parent)
 
         if question is None:
@@ -1092,10 +1063,10 @@ class DeletedQuestion(QtGui.QWidget):
 
 
 class QuestionsTabWidget(QtGui.QTabWidget):
-    def __init__(self, test, parent=None):
-        # type: (Test, QtGui.QWidget) -> None
+    def __init__(self, test: Test, index: int, parent: QtGui.QWidget = None):
         super(QuestionsTabWidget, self).__init__(parent)
 
+        self.index = index
         self.test = test
         self.setTabsClosable(True)
         self.setUpdatesEnabled(True)
@@ -1108,7 +1079,9 @@ class QuestionsTabWidget(QtGui.QTabWidget):
 
         self.setTabShape(QtGui.QTabWidget.Rounded)
 
-        self.addTab(TestDetails(test), "Details")
+        details = TestDetails(test)
+        details.nameChanged.connect(self.name_changed)
+        self.addTab(details, "Details")
         self.tabBar().tabButton(0, QtGui.QTabBar.RightSide).resize(0, 0)  # makes it not closable
         self.tabBar().tabMoved.connect(self.check_questions_name)
 
@@ -1128,6 +1101,9 @@ class QuestionsTabWidget(QtGui.QTabWidget):
                 wid.index = loc
 
             self.setTabText(loc, fmt)
+
+    def name_changed(self, s):
+        self.nameChanged.emit(self.index, s)
 
     def set_editable(self, b=True):
         """This method affects the questions editor parent"""
@@ -1174,6 +1150,8 @@ class QuestionsTabWidget(QtGui.QTabWidget):
         if setfocus:
             self.setCurrentIndex(self.count() - 1)
 
+    nameChanged = QtCore.pyqtSignal(int, str, name="nameChanged")
+
 
 class QuestionsEditor(QtGui.QMainWindow):
     def __init__(self, parent=None):
@@ -1193,7 +1171,6 @@ class QuestionsEditor(QtGui.QMainWindow):
 
         self.tests = QtGui.QListWidget()
         self.tests.currentItemChanged.connect(self.item_changed)
-        self.tests_d = {t.name: t for t in TESTS}
         for test in TESTS:
             QtGui.QListWidgetItem(test.name, self.tests)
 
@@ -1221,7 +1198,8 @@ class QuestionsEditor(QtGui.QMainWindow):
 
         lyt.addWidget(QtGui.QLabel(), 0, 2, 3, 1)
 
-        self.questions_tabs = QuestionsTabWidget(TESTS[0])
+        self.questions_tabs = QuestionsTabWidget(TESTS[0], 0)
+        self.questions_tabs.nameChanged.connect(self.update_name)
         lyt.addWidget(self.questions_tabs, 0, 3, 3, 3)
 
         lyt.setColumnStretch(3, 1)
@@ -1240,13 +1218,15 @@ class QuestionsEditor(QtGui.QMainWindow):
                                          QtCore.Qt.Horizontal, q)
         buttons.button(QtGui.QDialogButtonBox.Ok).setDisabled(True)
         q.buttons = buttons
+        test_widg.isEmpty.connect(lambda: buttons.button(QtGui.QDialogButtonBox.Ok).setDisabled(True))
+        test_widg.filled.connect(lambda: buttons.button(QtGui.QDialogButtonBox.Ok).setDisabled(False))
 
         def f():
             test_obj = test_widg.get_test()
-            if test_obj.name not in self.tests_d:
+            if not any(test_obj.name == t for t in TESTS):
                 q.accept()
                 QtGui.QListWidgetItem(test_obj.name, self.tests)
-                self.tests_d[test_obj.name] = test_obj
+                TESTS.append(test_obj)
             else:
                 QtGui.QMessageBox.warning(q, "Error",
                                           "Test '%s' already exists, please choose another name" % test_obj.name)
@@ -1261,21 +1241,24 @@ class QuestionsEditor(QtGui.QMainWindow):
                                                              "<font color=red><b>cannot</b></font> be <font color=red>"
                                                              "<b>undone</b></font>" % self.tests.currentItem().text(),
                                       QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes:
-            del self.tests_d[self.tests.currentItem().text()]
-            del self._cache[self.tests.currentItem().text()]
-            self.tests.takeItem(self.tests.row(self.tests.currentItem()))
+            index = self.tests.row(self.tests.currentItem())
+            del self._cache[index]
+            self.tests.takeItem(index)
 
-    def item_changed(self, now, last):
-        # type: (QtGui.QListWidgetItem, QtGui.QListWidgetItem) -> None
+    def item_changed(self, now: QtGui.QListWidgetItem, last: QtGui.QListWidgetItem):
 
-        txt = now.text()
+        item_index = self.tests.indexFromItem(now).row()
         self.questions_tabs.hide()
-        if txt not in self._cache:
-            self._cache[txt] = self.questions_tabs = QuestionsTabWidget(self.tests_d[txt])
+        if item_index not in self._cache:
+            self._cache[item_index] = self.questions_tabs = QuestionsTabWidget(TESTS[item_index], item_index)
+            self.questions_tabs.nameChanged.connect(self.update_name)
             self.lyt.addWidget(self.questions_tabs, 0, 3, 3, 3)
         else:
-            self.questions_tabs = self._cache[txt]
+            self.questions_tabs = self._cache[item_index]
             self.questions_tabs.show()
+
+    def update_name(self, index: int, string: str):
+        self.tests.item(index).setText(string)
 
     def closeEvent(self, event):
         if self.parent_window is not None:
@@ -1343,7 +1326,6 @@ class Auth(QtGui.QMainWindow):
     def login(self):
         name = self.nameT.text()
         password = self.passwordT.text()
-        fmt = "<font color=red>%s</font>"
         if (
                         hashlib.md5(name.encode()).digest() == b'\tM\x84\x1b\x8f\x171\x8bZ\xf6h\xa2\xe7\xde"P'
                 and hashlib.md5(password.encode()).digest() == b'\xec+\xb9B\xd9\xcb>\xc6dh\xe5\xcc=\xfa\x144'
@@ -1358,7 +1340,7 @@ class Auth(QtGui.QMainWindow):
             widget.show()
             self.hide()
         else:
-
+            fmt = "<font color=red>%s</font>"
             if not name and not password:
                 fmt %= "Name and Password fields can't be empty"
             elif not name:
@@ -1386,9 +1368,8 @@ class Auth(QtGui.QMainWindow):
 
 
 class TestCard(QtGui.QFrame):
-    def __init__(self, test, index, parent=None):
-        # type: (Test, int, QtGui.QWidget) -> None
-        super(TestCard, self).__init__(parent)
+    def __init__(self, test: Test, index: int, parent=None, **kwargs):
+        super(TestCard, self).__init__(parent, **kwargs)
         self.index = index
 
         self.setFrameShadow(QtGui.QFrame.Sunken)
@@ -1442,9 +1423,7 @@ class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's fu
             return
 
         for i, test in enumerate(TESTS):
-            card = TestCard(test, i, self)
-            card.chose.connect(self.chose)
-            lyt.addWidget(card)
+            lyt.addWidget(TestCard(test, i, self, chose=self.chose))
 
         if a > 1:
             lyt.addWidget(QtGui.QLabel("<hr>"))
@@ -1498,3 +1477,4 @@ if __name__ == '__main__':
     center_widget(main)
     main.show()
     app.exec_()
+    del main
