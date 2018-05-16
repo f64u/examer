@@ -13,16 +13,16 @@ import os
 import random
 import re
 import sys
-from collections import namedtuple
 import unicodedata
-import aenum
+from collections import namedtuple, OrderedDict
 
+import aenum
 from PyQt4 import QtGui, QtCore
 from cryptography.fernet import Fernet
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from typing import List, Any
+from typing import List, Union
 
 DEBUG = True
 
@@ -48,6 +48,8 @@ Answer = namedtuple("Answer", "string valid")
 Question = namedtuple("Question", "string pic answers")
 Test = namedtuple("Test", "name description time questions degree student_degrees")
 StudentDegree = namedtuple("Degree", "name phone school grade degree out_of failed_at left test")
+
+
 # =======================================================
 
 
@@ -99,25 +101,8 @@ def center_widget(widget: QtGui.QWidget) -> None:
 
 
 def format_secs(seconds: int, sp=("ساعة", "دقيقة", "ثانية"), sep="، ") -> str:
-    return sep.join(["%d%s" % (int(d), s) for d, s in zip(str(datetime.timedelta(seconds=seconds)).split(':'), sp)
+    return sep.join(["%d %s" % (int(d), s) for d, s in zip(str(datetime.timedelta(seconds=seconds)).split(':'), sp)
                      if not int(d) == 0])
-
-#
-# def to_secs(text: str, sp=("h", "m", "s"), sep=" ") -> int:
-#     parts = text.split(sep)
-#     secs = 0
-#     for part, lbl in zip(parts, sp):
-#         part = re.findall(r"(\d+)%s" % lbl, part)
-#         part = part and int(part[0]) or 0
-#
-#         if lbl == sp[0]:    # h mostly
-#             secs += part * 60 * 60
-#         elif lbl == sp[1]:  # m mostly
-#             secs += part * 60
-#         else:               # s mostly
-#             secs += part
-#
-#     return secs
 
 
 def _rel_icon(name: str) -> str:
@@ -149,9 +134,14 @@ def _init():
             with open(r, "w") as f:
                 f.write("")
 
+
 def _defer():
     if os.path.isfile("qt.conf"):
         os.remove("qt.conf")
+
+
+def _tab_repr(index: int, deleted=False) -> str:
+    return "Details" if index == 0 else "Q " + str(index) + (" (Deleted)" if deleted else "")
 
 
 # =======================================================
@@ -205,7 +195,7 @@ class TestWizard(QtGui.QWizard):
     degrees = []
 
     def __init__(self, test: Test, parent: QtGui.QWidget = None):
-        super(TestWizard, self).__init__(parent)
+        super().__init__(parent)
         self.test = test
         self.parent_window = None
         self.degree_per_q = self.test.degree / len(self.test.questions)
@@ -290,7 +280,7 @@ class TestWizard(QtGui.QWizard):
             if self.currentId() + 1 in self.already_visited_pages:
                 return self.currentId() + 1
             return self.pageIds()[-1]
-        return super(TestWizard, self).nextId()
+        return super().nextId()
 
     def next_or_back_clicked(self):
         if self.currentId() == self.pageIds()[-2] and not self.finished_answering:
@@ -344,7 +334,7 @@ class FormPage(QtGui.QWizardPage):
     ]
 
     def __init__(self, parent=None):
-        super(FormPage, self).__init__(parent)
+        super().__init__(parent)
 
         self.setTitle("<font color=red>" 'ادخل بياناتك' "</font>")
         self.setSubTitle(" ")
@@ -421,7 +411,7 @@ class FormPage(QtGui.QWizardPage):
 class FinalPage(QtGui.QWizardPage):
     class ColorBox(QtGui.QWidget):
         def __init__(self, color: str, description: str, parent=None):
-            super(FinalPage.ColorBox, self).__init__(parent)
+            super().__init__(parent)
             lyt = QtGui.QHBoxLayout()
             self.setLayout(lyt)
             lyt.setDirection(QtGui.QBoxLayout.RightToLeft)
@@ -435,7 +425,7 @@ class FinalPage(QtGui.QWizardPage):
             lyt.addWidget(QtGui.QLabel(description), 1)
 
     def __init__(self, parent=None):
-        super(FinalPage, self).__init__(parent)
+        super().__init__(parent)
 
         self.lyt = lyt = QtGui.QHBoxLayout()
         self.setLayout(lyt)
@@ -539,7 +529,7 @@ class QuestionPage(QtGui.QWizardPage):
 
     def __init__(self, question: Question, parent=None):
 
-        super(QuestionPage, self).__init__(parent)
+        super().__init__(parent)
         QuestionPage.QUESTION_NUM += 1
         self.id = QuestionPage.QUESTION_NUM
         self.degree = -1
@@ -612,9 +602,9 @@ class QuestionPage(QtGui.QWizardPage):
             else:
                 self.degree = 0
         else:
-            if state == 2:
+            if state == QtCore.Qt.Checked:
                 self.checkbox_clicked += 1
-            elif state == 0:
+            elif state == QtCore.Qt.Unchecked:
                 self.checkbox_clicked -= 1
 
             if len(self.valid) == self.checkbox_clicked:
@@ -644,6 +634,26 @@ class QuestionPage(QtGui.QWizardPage):
 
 # =======================================================
 
+class ReasonFlag(str, aenum.Flag, settings=(aenum.AutoValue,)):
+    _settings_ = aenum.AutoValue
+
+    def __new__(cls, value, string):
+        obj = str.__new__(cls, string)
+        obj._value_ = value
+        obj.string = string
+        return obj
+
+    @classmethod
+    def _create_pseudo_member_values_(cls, members, *values):
+        code = ";".join(m.string for m in members if m.string)
+        return values + (code,)
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self._value_ == other._value_
+
+    def __ne__(self, other):
+        return not self == other
+
 
 # ========== Degrees Viewer && Questions Editor =========
 
@@ -652,7 +662,7 @@ class QuestionPage(QtGui.QWizardPage):
 
 class EditableLabel(QtGui.QLineEdit):
     def __init__(self, text: str, parent=None):
-        super(EditableLabel, self).__init__(text, parent)
+        super().__init__(text, parent)
 
         self.setReadOnly(True)
         self.setStyleSheet("""
@@ -680,7 +690,7 @@ class EditableLabel(QtGui.QLineEdit):
 
 class IconButton(QtGui.QLabel):
     def __init__(self, icon: QtGui.QPixmap, index: int):
-        super(IconButton, self).__init__()
+        super().__init__()
 
         self.icon = icon
         self.setPixmap(self.icon)
@@ -707,7 +717,7 @@ class IconButton(QtGui.QLabel):
 
 class QuestionImage(QtGui.QFrame):
     def __init__(self, image: str = None, parent=None):
-        super(QuestionImage, self).__init__(parent)
+        super().__init__(parent)
 
         self._path = image
         self.image = None
@@ -748,7 +758,7 @@ class QuestionImage(QtGui.QFrame):
             QuestionImage {{
                 border-image: url("{}");
             }}
-        """.format(image.replace("\\", "/")))   # fucking windows
+        """.format(image.replace("\\", "/")))  # fucking windows
 
     def hideImage(self):
 
@@ -800,7 +810,7 @@ class AnswerWidget(QtGui.QWidget):
 
         self.setLayout(lyt)
         self.chk = chk = QtGui.QCheckBox()
-        chk.stateChanged.connect(lambda x: self.validabilityChanged.emit(x == QtCore.Qt.Checked, self.index))
+        chk.stateChanged.connect(lambda x: self.validityChanged.emit(x == QtCore.Qt.Checked, self.index))
         if answer.valid:
             chk.toggle()
 
@@ -855,7 +865,7 @@ class AnswerWidget(QtGui.QWidget):
     filled = QtCore.pyqtSignal(int, name="filled")
     addRequest = QtCore.pyqtSignal(int, name="addRequest")
     deleteRequest = QtCore.pyqtSignal(int, name="deleteRequest")
-    validabilityChanged = QtCore.pyqtSignal(bool, int, name="validabilityChanged")
+    validityChanged = QtCore.pyqtSignal(bool, int, name="validityChanged")
 
 
 # =======================================================
@@ -865,7 +875,7 @@ class AnswerWidget(QtGui.QWidget):
 
 # class DegreesViewer(QtGui.QMainWindow):
 #     def __init__(self, parent=None):
-#         super(DegreesViewer, self).__init__(parent)
+#         super().__init__(parent)
 #         self.resize(580, 400)
 #         self.setWindowTitle("Degrees Viewer")
 #
@@ -924,7 +934,7 @@ class AnswerWidget(QtGui.QWidget):
 class DegreesViewer(QtGui.QMainWindow):
 
     def __init__(self, parent=None):
-        super(DegreesViewer, self).__init__(parent)
+        super().__init__(parent)
         self.resize(900, 580)
         self.setWindowTitle("Degrees Viewer")
 
@@ -955,12 +965,15 @@ class DegreesViewer(QtGui.QMainWindow):
 
 
 class TestDetails(QtGui.QWidget):
+    class PreserveFocusReason(ReasonFlag):
+        NONE = ''
+        INVALID_NAME = "Name cannot be less than three characters."
 
-    def __init__(self, test=None, parent=None):
-        # type: (Test, QtGui.QWidget) -> None
-        super(TestDetails, self).__init__(parent)
+    def __init__(self, test: Test = None, parent: QtGui.QWidget = None):
+        super().__init__(parent)
 
         lyt = QtGui.QGridLayout()
+        self.want_focus_reasons = TestDetails.PreserveFocusReason.NONE
         self.setLayout(lyt)
 
         nameL = QtGui.QLabel("Test Name:")
@@ -1008,32 +1021,46 @@ class TestDetails(QtGui.QWidget):
             self.degreeT.setValue(test.degree)
 
     def observe_name(self, s: str):
-
-        if len(s) < 3:
-            self.status.setText("<font color=red>Test name cannot be less than three characters.</font>")
-            self.wantPreserveFocus.emit()
-        else:
-            self.status.setText("")
-            self.dontWantFocus.emit()
+        self._check_reason(TestDetails.PreserveFocusReason.INVALID_NAME, len(s) < 3)
+        if not len(s) < 3:
             self.nameChanged.emit(s)
+
+    def _check_reason(self, reason: PreserveFocusReason, happened: bool):
+        mod = False
+        if happened:
+            if reason not in self.want_focus_reasons:
+                self.want_focus_reasons |= reason
+                mod = True
+        else:
+            if reason in self.want_focus_reasons:
+                self.want_focus_reasons ^= reason
+                mod = True
+
+        if mod:
+            self.wantFocusChanged.emit(self.want_focus_reasons)
+            self.status.setText("<font color=red>{}</font>"
+                                .format("<br>".join(self.want_focus_reasons.split(";"))))
 
     @property
     def test(self):
-        time = self.timeT.time()    # type: QtCore.QTime
+        time = self.timeT.time()  # type: QtCore.QTime
         return Test(self.nameT.text(), self.descriptionT.toPlainText(),
                     time.second() + time.minute() * 60 + time.hour() * 60 * 60,
                     [], self.degreeT.value(), [])
 
-    wantPreserveFocus = QtCore.pyqtSignal(name="wantPreserveFocus")
-    dontWantFocus = QtCore.pyqtSignal(name="dontWantFocus")
+    wantFocusChanged = QtCore.pyqtSignal(PreserveFocusReason, name="wantFocusChange")
     nameChanged = QtCore.pyqtSignal(str, name="nameChanged")
 
 
 class QuestionTab(QtGui.QWidget):
-    PreserveFocusReason = aenum.Flag("PreserveFocusReason", "NONE EMPTY_QUESTION NUMBER_OF_ANSWERS NO_CORRECT_ANSWER")
+    class PreserveFocusReason(ReasonFlag):
+        NONE = ''
+        EMPTY_QUESTION = "Question cannot be empty."
+        NUMBER_OF_ANSWERS = "Number of answers cannot be less than 2."
+        NO_CORRECT_ANSWER = "A question cannot have no correct answers."
 
-    def __init__(self, question: Question = None, parent: QtGui.QWidget = None):
-        super(QuestionTab, self).__init__(parent)
+    def __init__(self, question: Question = None, index: int = -1, parent: QtGui.QWidget = None):
+        super().__init__(parent)
 
         self.want_focus_reasons = QuestionTab.PreserveFocusReason.NONE
         self.answers_lyt = QtGui.QVBoxLayout()
@@ -1046,6 +1073,7 @@ class QuestionTab(QtGui.QWidget):
         self.questionT.textChanged.connect(self.observe_name)
         self.answers_num = 0
         self.valid_num = 0
+        self.index = index
 
         if not self.s_question.string:
             self.questionT.setPlainText("Enter question")
@@ -1077,6 +1105,8 @@ class QuestionTab(QtGui.QWidget):
         lyt.addWidget(self.questionT, 1)
         lyt.addWidget(QtGui.QLabel("<hr>"))
         lyt.addLayout(image_and_answers, 2)
+        self.status = QtGui.QLabel()
+        lyt.addWidget(self.status)
 
         self.add_answers(self.s_question.answers)
 
@@ -1090,7 +1120,7 @@ class QuestionTab(QtGui.QWidget):
 
         answer_widget = AnswerWidget(answer, len(self.answers), last=True,
                                      deleteRequest=self.delete_answer, addRequest=self.add_answer,
-                                     validabilityChanged=self.validability_changed)
+                                     validityChanged=self.validity_changed)
         answer_widget.filled.connect(self.filled_answer)
         answer_widget.isEmpty.connect(self.empty_answer)
 
@@ -1101,7 +1131,7 @@ class QuestionTab(QtGui.QWidget):
         self.answers_lyt.addWidget(answer_widget)
         self.answers_num += 1
 
-        self._check_case(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, self.answers_num < 2)
+        self._check_reason(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, self.answers_num < 2)
 
     def add_answers(self, answers: List[Answer]):
         assert answers
@@ -1112,12 +1142,11 @@ class QuestionTab(QtGui.QWidget):
         for i, answer in enumerate(answers):
 
             if i != 0 and not answer.string:
-                print("An empty answer, shameful!")
                 continue
 
             widget = AnswerWidget(answer, len(self.answers),
                                   deleteRequest=self.delete_answer, addRequest=self.add_answer,
-                                  validabilityChanged=self.validability_changed)
+                                  validityChanged=self.validity_changed)
             widget.filled.connect(self.filled_answer)
             widget.isEmpty.connect(self.empty_answer)
 
@@ -1128,7 +1157,7 @@ class QuestionTab(QtGui.QWidget):
 
         self.answers_num += len(answers)
 
-        self._check_case(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, self.answers_num < 2)
+        self._check_reason(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, self.answers_num < 2)
 
     def delete_answer(self, index):
         if len(self.disabled_because) == 1 and index in self.disabled_because:
@@ -1139,15 +1168,15 @@ class QuestionTab(QtGui.QWidget):
         self.answers[index].deleted = True
         self.answers[index].deleteLater()
 
-        self._check_case(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, self.answers_num < 2)
+        self._check_reason(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, self.answers_num < 2)
 
-    def validability_changed(self, checked, index):
+    def validity_changed(self, checked, index):
         if checked:
             self.valid_num += 1
         else:
             self.valid_num -= 1
 
-        self._check_case(QuestionTab.PreserveFocusReason.NO_CORRECT_ANSWER, self.valid_num <= 0)
+        self._check_reason(QuestionTab.PreserveFocusReason.NO_CORRECT_ANSWER, self.valid_num <= 0)
 
     def empty_answer(self, index):
         self.disabled_because.add(index)
@@ -1160,18 +1189,24 @@ class QuestionTab(QtGui.QWidget):
         if len(self.disabled_because) == 0:
             self.answers[-1].mod.setDisabled(False)
 
-    def _check_case(self, case: PreserveFocusReason, happened: bool):
+    def _check_reason(self, reason: PreserveFocusReason, happened: bool):
+        mod = False
         if happened:
-            if case not in self.want_focus_reasons:
-                self.want_focus_reasons |= case
-                self.wantFocus.emit(self.want_focus_reasons)
+            if reason not in self.want_focus_reasons:
+                self.want_focus_reasons |= reason
+                mod = True
         else:
-            if case in self.want_focus_reasons:
-                self.want_focus_reasons ^= case
-                self.wantFocus.emit(self.want_focus_reasons)
+            if reason in self.want_focus_reasons:
+                self.want_focus_reasons ^= reason
+                mod = True
+
+        if mod:
+            self.wantFocusChanged.emit(self.index, self.want_focus_reasons)
+            self.status.setText("<font color=red>{}</font>"
+                                .format("<br>".join(self.want_focus_reasons.split(";"))))
 
     def observe_name(self):
-        self._check_case(QuestionTab.PreserveFocusReason.EMPTY_QUESTION, not self.questionT.toPlainText())
+        self._check_reason(QuestionTab.PreserveFocusReason.EMPTY_QUESTION, not self.questionT.toPlainText())
 
     @property
     def edited(self):
@@ -1182,25 +1217,30 @@ class QuestionTab(QtGui.QWidget):
         return Question(self.questionT.toPlainText(), self.image.image,
                         [ans.answer for ans in self.answers if not ans.deleted])
 
-    wantFocus = QtCore.pyqtSignal(PreserveFocusReason, name="wantFocus")
+    wantFocusChanged = QtCore.pyqtSignal(int, PreserveFocusReason, name="wantFocusChanged")
 
 
 class DeletedQuestion(QtGui.QWidget):
-    def __init__(self, question: QuestionTab, index: int, widget: QtGui.QTabWidget, parent: QtGui.QWidget = None):
-        super(DeletedQuestion, self).__init__(parent)
+    def __init__(self, question: QuestionTab, index: int, parent: QtGui.QWidget = None):
+        super().__init__(parent)
 
         self.question = question
         self.question.deleted = True
-        self.of = widget
         self._index = index
-        self.lbl = QtGui.QLabel("<u><font color=blue>Undo Close Question %d</font></u>" % self.index)
-        self.lbl.setCursor(QtCore.Qt.PointingHandCursor)
-        self.lbl.mousePressEvent = self.open_question
+
+        self.link = QtGui.QLabel("<a href='#undo'>Undo Close Question {}</a>".format(self.index))
+        self.link.setOpenExternalLinks(False)
+
+        def f(s):
+            self.question.deleted = False
+            self.openRequested.emit(self.index)
+
+        self.link.linkActivated.connect(f)
 
         lyt = QtGui.QVBoxLayout()
         self.setLayout(lyt)
 
-        lyt.addWidget(self.lbl, alignment=QtCore.Qt.AlignCenter)
+        lyt.addWidget(self.link, alignment=QtCore.Qt.AlignCenter)
 
     @property
     def index(self):
@@ -1209,21 +1249,15 @@ class DeletedQuestion(QtGui.QWidget):
     @index.setter
     def index(self, value):
         self._index = value
-        self.lbl.setText("<u><font color=blue>Undo Close Question %d</font></u>" % self.index)
+        self.link.setText("<a href='#undo'>Undo Close Question {}</a>".format(self.index))
 
-    def open_question(self, e):
-        self.question.deleted = False
-        self.of.removeTab(self.index)
-        self.of.insertTab(self.index, self.question, "Q %d" % self.index)
-        self.of.tabBar().tabButton(self.index, QtGui.QTabBar.RightSide).setToolTip("Delete Question")
-        self.of.setCurrentIndex(self.index)
+    openRequested = QtCore.pyqtSignal(int, name="openRequested")
 
 
 class QuestionsTabWidget(QtGui.QTabWidget):
-    StayInTabReason = aenum.Flag("StayInTabReason", "NONE DETAILS QUESTION")
 
     def __init__(self, test: Test, index: int, parent: QtGui.QWidget = None):
-        super(QuestionsTabWidget, self).__init__(parent)
+        super().__init__(parent)
 
         self.index = index
         self.s_test = test
@@ -1231,96 +1265,69 @@ class QuestionsTabWidget(QtGui.QTabWidget):
         self.setUpdatesEnabled(True)
         self.setMovable(True)
         self.current_index = -1
-        self.stay_in_tab_reasons = QuestionsTabWidget.StayInTabReason.NONE
-        self.want_focus = True
+        self.reasons = OrderedDict()
 
         btn = QtGui.QToolButton()
         btn.setIcon(QtGui.QIcon(_res("add.png", "icon")))
         btn.clicked.connect(self.add_question)
         self.setCornerWidget(btn)
 
-        self.currentChanged.connect(self.tab_changed)
-
         details = TestDetails(test)
+        self.reasons[0] = TestDetails.PreserveFocusReason.NONE
+
+        details.wantFocusChanged.connect(lambda r: self.updateErrors.emit(self.errors))
         details.nameChanged.connect(self.name_changed)
-        details.wantPreserveFocus.connect(lambda: self.stay(QuestionsTabWidget.StayInTabReason.DETAILS))
-        details.dontWantFocus.connect(lambda: self.leave(QuestionsTabWidget.StayInTabReason.DETAILS))
         self.addTab(details, "Details")
         self.tabBar().tabButton(0, QtGui.QTabBar.RightSide).resize(0, 0)  # makes it not closable
-        self.tabBar().tabMoved.connect(self._check_questions_name)
+        # self.tabBar().tabMoved.connect(self._check_questions_name)
+        self.tabBar().tabMoved.connect(self.tab_moved)
 
-        for i, question in enumerate(test.questions):
+        for question in test.questions:
             self.add_question(question=question, setfocus=False)
 
-            self.tabBar().tabButton(i, QtGui.QTabBar.RightSide).icon().themeSearchPaths()
-
         self.tabCloseRequested.connect(self.delete_question)
-
-    def tab_changed(self, index: int):
-        if index == self.current_index:
-            return
-
-        prev_widget = self.widget(self.current_index)
-        if isinstance(prev_widget, TestDetails) and QuestionsTabWidget.StayInTabReason.DETAILS in self.stay_in_tab_reasons:
-            QtGui.QMessageBox.warning(self, "Cannot change tab", "You can't leave the details tab.")
-            self.setCurrentIndex(self.current_index)
-            return
-        elif isinstance(prev_widget, QuestionTab) and QuestionsTabWidget.StayInTabReason.QUESTION in self.stay_in_tab_reasons:
-            QtGui.QMessageBox.warning(self,
-                                      "Cannot change tab", "You can't leave the ues")
-            self.setCurrentIndex(self.current_index)
-            return
-
-        self.current_index = index
 
     def name_changed(self, s):
         self.nameChanged.emit(self.index, s)
 
-    def set_editable(self, b=True):
-        """This method affects the questions editor parent"""
-
-        self.setTabsClosable(b)
-        self.cornerWidget().setEnabled(b)
-        # self.parent().parent().tests.setEnabled(b)
-        for i in range(1, self.count()):
-            self.setTabEnabled(i, b)
-
-        if b:
-            self.tabBar().tabButton(0, QtGui.QTabBar.RightSide).resize(0, 0)  # makes it not closable
-
-        questions_editor = self.parent().parent()  # type: QuestionsEditor
-        questions_editor.tests.setEnabled(b)
-        questions_editor.btn_add_test.setEnabled(b)
-        questions_editor.btn_remove_test.setEnabled(b)
-
     def delete_question(self, index):
 
         old_ques = self.widget(index)
-        if not isinstance(old_ques, QuestionTab):
-            if QtGui.QMessageBox.question(self, "Are you sure?",
-                                          "Are you sure you want to <font color=red>force delete</font> Q %d?"
-                                          " This can't be <b><font color=red>undone</font></b>." % index,
-                                          QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes:
-                self.removeTab(index)
-                self._check_questions_name(*range(index, self.count()))
+        if (isinstance(old_ques, DeletedQuestion)
+                and QtGui.QMessageBox.question(self, "Are you sure?",
+                                               "Are you sure you want to <font color=red>force delete</font> Q %d?"
+                                               " This cannot be <b><font color=red>undone</font></b>." % index,
+                                               QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes):
+
+            self.removeTab(index)
+            self._check_questions_name(*range(index, self.count()))
 
         elif QtGui.QMessageBox.question(self, "Are you sure?", "Are you sure you want to delete Q %d?" % index,
                                         QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes:
             self.removeTab(index)
             del_ques = DeletedQuestion(old_ques, index, self)
+            del_ques.openRequested.connect(self.open_deleted_question)
             self.insertTab(index, del_ques, "Q %d (Deleted)" % index)
             self.tabBar().tabButton(index, QtGui.QTabBar.RightSide).setToolTip("Force Delete Question")
             self.setCurrentIndex(index)
+            del self.reasons[index]
+            self.updateErrors.emit(self.errors)
 
-    def add_question(self, event=False, question=None, setfocus=True):
-        tab = QuestionTab(question)
-        tab.wantFocus.connect(lambda reason: print(reason))
+    def add_question(self, _=False, question=None, setfocus=True):
+        index = self.count()
+        tab = QuestionTab(question, index)
+        self.reasons[index] = QuestionTab.PreserveFocusReason.NONE
+        tab.wantFocusChanged.connect(lambda i, r: self.updateErrors.emit(self.errors))
         self.addTab(tab, "Q %d" % self.count())
         tab.questionT.setFocus()
-        btn = self.tabBar().tabButton(self.count() - 1, QtGui.QTabBar.RightSide)  # type: QtGui.QAbstractButton
+        btn = self.tabBar().tabButton(index, QtGui.QTabBar.RightSide)  # type: QtGui.QAbstractButton
         btn.setToolTip("Delete Question")
         if setfocus:
-            self.setCurrentIndex(self.count() - 1)
+            self.setCurrentIndex(index)
+
+    def set_reason(self, index: int, reason: Union[QuestionTab.PreserveFocusReason, TestDetails.PreserveFocusReason]):
+        self.reasons[index] = reason
+        self.updateErrors.emit(self.errors)
 
     def _check_questions_name(self, *locations):
         for loc in locations:
@@ -1332,42 +1339,68 @@ class QuestionsTabWidget(QtGui.QTabWidget):
 
             self.setTabText(loc, fmt)
 
-    def stay(self, reason: StayInTabReason):
-        if reason not in self.stay_in_tab_reasons:
-            self.stay_in_tab_reasons |= reason
+    def tab_moved(self, *args):
+        self.updateErrors.emit(self.errors)
+        self._check_questions_name(*args)
 
-    def leave(self, reason: StayInTabReason):
-        if reason in self.stay_in_tab_reasons:
-            self.stay_in_tab_reasons ^= reason
+    def open_deleted_question(self, index):
+        question = self.widget(index).question
+        self.removeTab(index)
+        self.insertTab(index, question, "Q %d" % index)
+        self.tabBar().tabButton(index, QtGui.QTabBar.RightSide).setToolTip("Delete Question")
+        self.setCurrentIndex(index)
+        self.reasons[index] = question.want_focus_reasons
+        self.updateErrors.emit(self.errors)
 
     @property
     def test(self):
         details = self.widget(0).test  # type: Test
         return Test(details.name, details.description, details.time,
-                    [self.widget(i).question for i in range(1, self.count()) if isinstance(self.widget(i), QuestionTab)],
+                    [self.widget(i).question for i in range(1, self.count()) if
+                     isinstance(self.widget(i), QuestionTab)],
                     details.degree, [])
 
     @property
     def edited(self):
         return self.test != self.s_test
 
+    @property
+    def errors(self):
+        errs = OrderedDict()
+
+        details_reason = self.widget(0).want_focus_reasons
+        if details_reason != TestDetails.PreserveFocusReason.NONE:
+            errs[0] = details_reason
+
+        for i in range(1, self.count()):
+            reason = self.widget(i).want_focus_reasons
+            if reason != QuestionTab.PreserveFocusReason.NONE:
+                errs[i] = reason
+
+        return errs
+
     nameChanged = QtCore.pyqtSignal(int, str, name="nameChanged")
+    updateErrors = QtCore.pyqtSignal(OrderedDict, name="updateErrors")
 
 
 class QuestionsEditor(QtGui.QMainWindow):
     def __init__(self, parent=None):
-        super(QuestionsEditor, self).__init__(parent)
+        super().__init__(parent)
 
         toolBar = QtGui.QToolBar()
         toolBar.setMovable(False)
         toolBar.addSeparator()
-        toolBar.addWidget(QtGui.QPushButton(QtGui.QIcon(_res("add.png", "icon")), ""))
-        # self.addToolBar(toolBar)
+        save_btn = QtGui.QPushButton(QtGui.QIcon(_res("save.png", "icon")), "")
+        toolBar.addWidget(save_btn)
+        self.addToolBar(toolBar)
         self.setWindowTitle("Questions Editor")
 
         sts_bar = QtGui.QStatusBar()
-        sts_bar.setStyleSheet("background-color: #ccc; border-top: 1.5px solid grey")
-        sts_bar.showMessage("Ready")
+        sts_bar.setStyleSheet("QStatusBar { background-color: #ccc; border-top: 1.5px solid grey } ")
+        self.sts_bar_lbl = QtGui.QLabel("Ready.")
+        self.sts_bar_lbl.setOpenExternalLinks(False)
+        self.sts_bar_lbl.linkActivated.connect(lambda i: self.questions_tabs.setCurrentIndex(int(i)))
+        sts_bar.addWidget(self.sts_bar_lbl)
         self.setStatusBar(sts_bar)
 
         self.resize(1000, 600)
@@ -1387,7 +1420,7 @@ class QuestionsEditor(QtGui.QMainWindow):
         self.tests.currentItemChanged.connect(self.item_changed)
         for test in TESTS:
             QtGui.QListWidgetItem(test.name, self.tests)
-        self.tests.item(0).setSelected(True)
+        self.tests.setCurrentItem(self.tests.item(0))
 
         leftSide = QtGui.QVBoxLayout()
         leftSide.addWidget(QtGui.QLabel("Available Tests:"))
@@ -1414,6 +1447,7 @@ class QuestionsEditor(QtGui.QMainWindow):
         lyt.addWidget(QtGui.QLabel(), 0, 2, 3, 1)
 
         self.questions_tabs = QuestionsTabWidget(TESTS[0], 0)
+        self.questions_tabs.updateErrors.connect(self.update_status_bar)
         self.questions_tabs.nameChanged.connect(self.update_name)
         self._cache[0] = self.questions_tabs
         lyt.addWidget(self.questions_tabs, 0, 3, 3, 3)
@@ -1421,7 +1455,7 @@ class QuestionsEditor(QtGui.QMainWindow):
         lyt.setColumnStretch(3, 1)
         lyt.setRowStretch(1, 1)
 
-    def add_test(self, e):
+    def add_test(self, _):
         q = QtGui.QDialog(self)
         q.setWindowTitle("Enter Test Details")
         q.setModal(True)
@@ -1461,6 +1495,9 @@ class QuestionsEditor(QtGui.QMainWindow):
             del self._cache[index]
             self.tests.takeItem(index)
 
+    def update_name(self, index: int, string: str):
+        self.tests.item(index).setText(string)
+
     def item_changed(self, current: QtGui.QListWidgetItem, previous: QtGui.QListWidgetItem):
 
         previous_index = self.tests.row(previous)
@@ -1469,12 +1506,14 @@ class QuestionsEditor(QtGui.QMainWindow):
         if current_index == self._current_row:
             return
 
-        if self._cache[previous_index].want_focus:
-            QtGui.QMessageBox.warning(self, "Can't change test",
-                                      "Test `{}` has some errors so you can't leave it".format(previous.text()))
+        errs = self._cache[previous_index].errors
+        if len(errs) != 0:
+            locs = ", ".join(_tab_repr(i) for i in errs)
+            QtGui.QMessageBox.warning(self, "Cannot Change The Current Test.",
+                                      "Test `{}` has some errors so you can't leave it. See the {} tab{}."
+                                      .format(previous.text(), locs, 's' if len(errs) > 1 else ''))
 
             QtCore.QTimer.singleShot(0, lambda: self.tests.setCurrentRow(self._current_row))
-
             return
         else:
             self._current_row = self.tests.row(current)
@@ -1482,14 +1521,21 @@ class QuestionsEditor(QtGui.QMainWindow):
         self.questions_tabs.hide()
         if current_index not in self._cache:
             self._cache[current_index] = self.questions_tabs = QuestionsTabWidget(TESTS[current_index], current_index)
+            self.questions_tabs.updateErrors.connect(self.update_status_bar)
             self.questions_tabs.nameChanged.connect(self.update_name)
             self.lyt.addWidget(self.questions_tabs, 0, 3, 3, 3)
         else:
             self.questions_tabs = self._cache[current_index]
             self.questions_tabs.show()
 
-    def update_name(self, index: int, string: str):
-        self.tests.item(index).setText(string)
+    def update_status_bar(self, errs: OrderedDict):
+
+        if errs:
+            self.sts_bar_lbl.setText("Error in the {} tab{}."
+                                     .format(", ".join("<a href='{}'>{}</a>".format(i, _tab_repr(i)) for i in errs),
+                                             's' if len(errs) > 1 else ''))
+        else:
+            self.sts_bar_lbl.setText("Ready.")
 
     @property
     def edited(self):
@@ -1501,10 +1547,9 @@ class QuestionsEditor(QtGui.QMainWindow):
                                               "You have some unsaved changes.",
                                               QtGui.QMessageBox.Yes | QtGui.QMessageBox.No | QtGui.QMessageBox.Cancel)
             if rslt == QtGui.QMessageBox.Yes:
-                # TODO
                 print("Clicked Yes.")
             elif rslt == QtGui.QMessageBox.No:
-                pass
+                event.accept()
             else:
                 event.ignore()
                 return
@@ -1516,18 +1561,6 @@ class QuestionsEditor(QtGui.QMainWindow):
 
 # =======================================================
 
-class List(QtGui.QListWidget):
-
-
-    def __init__(self, parent=None):
-        super(List, self).__init__(parent)
-
-    def changeEvent(self, *args, **kwargs):
-        super(List, self).changeEvent(*args, **kwargs)
-        print(args, kwargs)
-
-
-
 # =======================================================
 
 # ==================== Outer Widgets ====================
@@ -1535,7 +1568,7 @@ class List(QtGui.QListWidget):
 
 class Auth(QtGui.QMainWindow):
     def __init__(self, parent=None):
-        super(Auth, self).__init__(parent)
+        super().__init__(parent)
         self.setWindowTitle("Auth")
         self.setFixedSize(350, 200)
         self.parent_window = None
@@ -1629,7 +1662,7 @@ class Auth(QtGui.QMainWindow):
 
 class TestCard(QtGui.QFrame):
     def __init__(self, test: Test, index: int, parent=None, **kwargs):
-        super(TestCard, self).__init__(parent, **kwargs)
+        super().__init__(parent, **kwargs)
         self.index = index
 
         self.setFrameShadow(QtGui.QFrame.Sunken)
@@ -1643,7 +1676,7 @@ class TestCard(QtGui.QFrame):
         btn.setIcon(QtGui.QIcon("arrow.png"))
         btn.clicked.connect(self.open)
         lyt.addWidget(QtGui.QLabel(), 2, 0)
-        text = re.sub(r'\b(\d+)\b', r'<b>\1</b>', "%s | %d درجة | <b>%d</b> سؤال"
+        text = re.sub(r'\b(\d+)\b', r'<b>\1</b>', "%s | %d درجة | %d سؤال"
                       % (format_secs(test.time), int(test.degree), len(test.questions)))
         lyt.addWidget(QtGui.QLabel("<font size=3 color=grey>%s</font>" % text),
                       3, 0, 1, 2, alignment=QtCore.Qt.AlignLeft)
@@ -1660,7 +1693,7 @@ class TestCard(QtGui.QFrame):
 class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's funny :")
 
     def __init__(self, parent=None):
-        super(TestChooser, self).__init__(parent)
+        super().__init__(parent)
         self.setWindowTitle("إختر امتحانًا")
         self.setWindowIcon(QtGui.QIcon(_res("test.ico", "icon")))
         self.resize(600, 300)
@@ -1689,9 +1722,10 @@ class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's fu
             lyt.addWidget(QtGui.QLabel("<hr>"))
             lyt.addWidget(QtGui.QLabel("النهاية"), alignment=QtCore.Qt.AlignCenter)
 
-        login_link = QtGui.QLabel("<u><font color=blue>Open questions editor</font></u>")
+        login_link = QtGui.QLabel("<a href='#open'>Open questions editor</a>")
+        login_link.setOpenExternalLinks(False)
 
-        def f1(e):
+        def f(s):
             auth = Auth()
             center_widget(auth)
             auth.parent_window = self
@@ -1699,18 +1733,12 @@ class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's fu
             CURRENT_ACTIVE[0] = auth
             self.hide()
 
-        login_link.mouseReleaseEvent = f1
-
-        def f2(e):
-            login_link.setText("<u><font color=purple>Open questions editor</font></u>")
-
-        login_link.mousePressEvent = f2
-        login_link.setCursor(QtCore.Qt.PointingHandCursor)
+        login_link.linkActivated.connect(f)
 
         topmost.addWidget(QtGui.QLabel("<hr>"))
         dwn = QtGui.QHBoxLayout()
         dwn.addWidget(QtGui.QLabel())
-        dwn.addWidget(QtGui.QLabel("%d Test%s " % (a, 's' if a > 1 else '')), alignment=QtCore.Qt.AlignCenter)
+        dwn.addWidget(QtGui.QLabel("{} Test{}".format(a, 's' if a > 1 else '')), alignment=QtCore.Qt.AlignCenter)
         dwn.addWidget(login_link, alignment=QtCore.Qt.AlignRight)
         topmost.addLayout(dwn)
 
