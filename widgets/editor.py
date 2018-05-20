@@ -1,15 +1,13 @@
-import sys
 from collections import OrderedDict
-
-from PyQt4 import QtCore, QtGui
 from typing import List
 
-from tests import TESTS
+from PyQt4 import QtCore, QtGui
+
+from data import TESTS
 from utils.helpers import (
     Test, Question, Answer,
     res, tab_repr,
-    ReasonFlag,
-    center_widget)
+    ReasonFlag)
 from utils.parsers import dump_tests
 from widgets.innerwidgets import QuestionImage, AnswerWidget
 
@@ -110,6 +108,8 @@ class QuestionTab(QtGui.QWidget):
         EMPTY_QUESTION = "Question cannot be empty."
         NUMBER_OF_ANSWERS = "Number of answers cannot be less than 2."
         NO_CORRECT_ANSWER = "A question cannot have no correct answers."
+        ALL_ANSWERS_CORRECT = "A question's answers cannot be all correct."
+        EMPTY_ANSWER = "A question's answer cannot be empty."
 
     def __init__(self, question: Question = None, index: int = -1, parent: QtGui.QWidget = None):
         super().__init__(parent)
@@ -162,7 +162,16 @@ class QuestionTab(QtGui.QWidget):
 
         self.add_answers(self.s_question.answers)
 
-    def add_answer(self, e=None, answer: Answer = None):
+        self._check_reason(QuestionTab.PreserveFocusReason.EMPTY_QUESTION, not self.s_question.string)
+        self._check_reason(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, len(self.s_question.answers) < 2)
+        self._check_reason(QuestionTab.PreserveFocusReason.NO_CORRECT_ANSWER,
+                           not any(ans.valid for ans in self.s_question.answers))
+        self._check_reason(QuestionTab.PreserveFocusReason.ALL_ANSWERS_CORRECT,
+                           all(ans.valid for ans in self.s_question.answers))
+        self._check_reason(QuestionTab.PreserveFocusReason.EMPTY_ANSWER,
+                           any(not ans.string for ans in self.s_question.answers))
+
+    def add_answer(self, _=None, answer: Answer = None):
 
         if len(self.answers) > 0:
             self.answers[-1].last = False
@@ -184,6 +193,8 @@ class QuestionTab(QtGui.QWidget):
         self.answers_num += 1
 
         self._check_reason(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, self.answers_num < 2)
+        self._check_reason(QuestionTab.PreserveFocusReason.EMPTY_ANSWER, not answer.string)
+        self._check_reason(QuestionTab.PreserveFocusReason.ALL_ANSWERS_CORRECT, answer.valid)
 
     def add_answers(self, answers: List[Answer]):
         assert answers
@@ -210,6 +221,8 @@ class QuestionTab(QtGui.QWidget):
         self.answers_num += len(answers)
 
         self._check_reason(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, self.answers_num < 2)
+        self._check_reason(QuestionTab.PreserveFocusReason.EMPTY_ANSWER,
+                           any(not q.string for q in self.question.answers))
 
     def delete_answer(self, index):
         if len(self.disabled_because) == 1 and index in self.disabled_because:
@@ -226,25 +239,30 @@ class QuestionTab(QtGui.QWidget):
 
         self._check_reason(QuestionTab.PreserveFocusReason.NUMBER_OF_ANSWERS, self.answers_num < 2)
         self._check_reason(QuestionTab.PreserveFocusReason.NO_CORRECT_ANSWER, self.valid_num <= 0)
+        self._check_reason(QuestionTab.PreserveFocusReason.EMPTY_ANSWER,
+                           any(not q.string for q in self.question.answers))
 
-    def validity_changed(self, checked, index):
+    def validity_changed(self, checked, _):
         if checked:
             self.valid_num += 1
         else:
             self.valid_num -= 1
 
         self._check_reason(QuestionTab.PreserveFocusReason.NO_CORRECT_ANSWER, self.valid_num <= 0)
+        self._check_reason(QuestionTab.PreserveFocusReason.ALL_ANSWERS_CORRECT, self.valid_num == self.answers_num)
 
     def empty_answer(self, index):
         self.disabled_because.add(index)
         if len(self.disabled_because) == 1:
             self.answers[-1].mod.setDisabled(True)
+            self._check_reason(QuestionTab.PreserveFocusReason.EMPTY_ANSWER, True)
 
     def filled_answer(self, index):
         if index in self.disabled_because:
             self.disabled_because.remove(index)
         if len(self.disabled_because) == 0:
             self.answers[-1].mod.setDisabled(False)
+            self._check_reason(QuestionTab.PreserveFocusReason.EMPTY_ANSWER, False)
 
     def _check_reason(self, reason: PreserveFocusReason, happened: bool):
         mod = False
@@ -380,12 +398,13 @@ class QuestionsTabWidget(QtGui.QTabWidget):
     def _check_questions_name(self, *locations):
         for loc in locations:
             wid = self.widget(loc)
-            fmt = "Q %d" % loc
             if isinstance(wid, DeletedQuestion):
-                fmt += " (Deleted)"
+                text = tab_repr(loc, deleted=True)
                 wid.index = loc
+            else:
+                text = tab_repr(loc)
 
-            self.setTabText(loc, fmt)
+            self.setTabText(loc, text)
 
     def tab_moved(self, *args):
         self.updateErrors.emit(self.errors)
@@ -409,7 +428,8 @@ class QuestionsTabWidget(QtGui.QTabWidget):
 
     @property
     def index(self):
-        return self.parent().parent().tests.row(self._item)
+        questions_editor = self.parent().parent().parent()  # type: QuestionsEditor
+        return questions_editor.tests_list.row(self._item)
 
     @property
     def edited(self):
@@ -444,24 +464,29 @@ class QuestionsEditor(QtGui.QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self.just_deleted_a_test = False  # used in navigation (not to test that there were errors in the deleted test)
+
         toolBar = QtGui.QToolBar()
         toolBar.setMovable(False)
-        toolBar.addSeparator()
-        save_btn = QtGui.QPushButton(QtGui.QIcon(res("save.png", "icon")), "")
+        save_btn = QtGui.QPushButton(QtGui.QIcon(res("save.png", "icon")), "Save")
+        save_btn.clicked.connect(self.save)
+        save_btn.setToolTip("Save Tests")
         toolBar.addWidget(save_btn)
         self.addToolBar(toolBar)
         self.setWindowTitle("Questions Editor")
+
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self, self.save)
 
         sts_bar = QtGui.QStatusBar()
         sts_bar.setStyleSheet("QStatusBar { background-color: #ccc; border-top: 1.5px solid grey } ")
         self.sts_bar_lbl = QtGui.QLabel("Ready.")
         self.sts_bar_lbl.setOpenExternalLinks(False)
-        self.sts_bar_lbl.linkActivated.connect(lambda i: self.questions_tabs.setCurrentIndex(int(i)))
+        self.sts_bar_lbl.linkActivated.connect(lambda index:
+                                               self.tests_widget.currentWidget().setCurrentIndex(int(index)))
         sts_bar.addWidget(self.sts_bar_lbl)
         self.setStatusBar(sts_bar)
 
         self.resize(1000, 600)
-        self._cache = {}
         self.parent_window = None
         self._current_row = 0
 
@@ -472,16 +497,13 @@ class QuestionsEditor(QtGui.QMainWindow):
 
         lyt.setMargin(10)
 
-        self.tests = QtGui.QListWidget()
-        self.tests.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
-        self.tests.currentItemChanged.connect(self.item_changed)
-        for test in TESTS:
-            QtGui.QListWidgetItem(test.name, self.tests)
-        self.tests.setCurrentItem(self.tests.item(0))
+        self.tests_list = QtGui.QListWidget()
+        self.tests_list.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
+        self.tests_list.currentItemChanged.connect(self.item_changed)
 
         leftSide = QtGui.QVBoxLayout()
         leftSide.addWidget(QtGui.QLabel("Available Tests:"))
-        leftSide.addWidget(self.tests)
+        leftSide.addWidget(self.tests_list)
         self.btn_add_test = btn_add_test = QtGui.QPushButton()
         btn_add_test.setToolTip("Add a new test")
         btn_add_test.setIcon(QtGui.QIcon(res("add.png", "icon")))
@@ -490,7 +512,7 @@ class QuestionsEditor(QtGui.QMainWindow):
         self.btn_remove_test = btn_remove_test = QtGui.QPushButton()
         btn_remove_test.setToolTip("Remove selected test")
         btn_remove_test.setIcon(QtGui.QIcon(res("minus.png", "icon")))
-        btn_remove_test.clicked.connect(self.remove_test)
+        btn_remove_test.clicked.connect(self.delete_test)
 
         buttons = QtGui.QHBoxLayout()
         buttons.addWidget(btn_add_test, alignment=QtCore.Qt.AlignLeft)
@@ -503,11 +525,21 @@ class QuestionsEditor(QtGui.QMainWindow):
 
         lyt.addWidget(QtGui.QLabel(), 0, 2, 3, 1)
 
-        self.questions_tabs = QuestionsTabWidget(TESTS[0], self.tests.item(0), parent=self)
-        self.questions_tabs.updateErrors.connect(self.update_status_bar)
-        self.questions_tabs.nameChanged.connect(self.update_name)
-        self._cache[0] = self.questions_tabs
-        lyt.addWidget(self.questions_tabs, 0, 3, 3, 3)
+        self.tests_widget = QtGui.QStackedWidget()
+
+        i = -1
+        for i, test in enumerate(TESTS):
+            item = QtGui.QListWidgetItem(test.name, self.tests_list)
+
+            question_widget = QuestionsTabWidget(TESTS[i], item, parent=self)
+            question_widget.updateErrors.connect(self.update_status_bar)
+            question_widget.nameChanged.connect(self.update_name)
+            self.tests_widget.addWidget(question_widget)
+        if i >= 0:
+            self.tests_list.setCurrentItem(self.tests_list.item(0))
+        del i
+
+        lyt.addWidget(self.tests_widget, 0, 3, 3, 3)
 
         lyt.setColumnStretch(3, 1)
         lyt.setRowStretch(1, 1)
@@ -532,8 +564,12 @@ class QuestionsEditor(QtGui.QMainWindow):
             test_obj = test_widg.test
             if not any(test_obj.name == t.name for t in TESTS):
                 q.accept()
-                QtGui.QListWidgetItem(test_obj.name, self.tests)
-                TESTS.append(test_obj)
+                item = QtGui.QListWidgetItem(test_obj.name, self.tests_list)
+
+                question_widget = QuestionsTabWidget(test_obj, item, parent=self)
+                question_widget.updateErrors.connect(self.update_status_bar)
+                question_widget.nameChanged.connect(self.update_name)
+                self.tests_widget.addWidget(question_widget)
             else:
                 QtGui.QMessageBox.warning(q, "Error",
                                           "Test '%s' already exists, please choose another name" % test_obj.name)
@@ -543,58 +579,54 @@ class QuestionsEditor(QtGui.QMainWindow):
         lay.addWidget(buttons)
         q.show()
 
-    def remove_test(self):
+    def delete_test(self):
         if QtGui.QMessageBox.question(self, "Are you sure?", "Are you sure you want to delete '%s' ? This "
                                                              "<font color=red><b>cannot</b></font> be <font color=red>"
-                                                             "<b>undone</b></font>" % self.tests.currentItem().text(),
+                                                             "<b>undone</b></font>" % self.tests_list.currentItem().text(),
                                       QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes:
-            index = self.tests.row(self.tests.currentItem())
-            for key in self._cache.copy():
-                if key > index:
-                    self._cache[key - 1] = self._cache[key]
-                    del self._cache[key]
-
-            self._cache.setdefault(index, None)
-            del TESTS[index]
-            self.tests.takeItem(index)
+            index = self.tests_list.row(self.tests_list.currentItem())
+            self.just_deleted_a_test = True
+            self.tests_list.takeItem(index)
+            if index == self.tests_list.count():
+                print(True)
+                self._current_row -= 2
+            else:
+                self._current_row -= 1
+            self.tests_widget.removeWidget(self.tests_widget.widget(index))
 
     def update_name(self, index: int, string: str):
-        self.tests.item(index).setText(string)
+        self.tests_list.item(index).setText(string)
 
     def item_changed(self, current: QtGui.QListWidgetItem, previous: QtGui.QListWidgetItem):
 
-        previous_index = self.tests.row(previous)
-        current_index = self.tests.row(current)
+        previous_index = self.tests_list.row(previous)
+        current_index = self.tests_list.row(current)
+
+        print(previous_index, current_index)
 
         if current_index == self._current_row:
             return
 
-        widget = self._cache[previous_index]
+        widget = self.tests_widget.widget(previous_index)
         errs = widget.errors if widget is not None else []
-        if len(errs) != 0:
+        if not self.just_deleted_a_test and len(errs) != 0:
             locs = ", ".join(tab_repr(i) for i in errs)
             QtGui.QMessageBox.warning(self, "Cannot Change The Current Test.",
                                       "Test `{}` has some errors so you can't leave it. See the {} tab{}."
                                       .format(previous.text(), locs, 's' if len(errs) > 1 else ''))
 
-            QtCore.QTimer.singleShot(0, lambda: self.tests.setCurrentRow(self._current_row))
+            QtCore.QTimer.singleShot(0, lambda: self.tests_list.setCurrentRow(self._current_row))
             return
         else:
-            self._current_row = self.tests.row(current)
+            self.just_deleted_a_test = False
+            self._current_row = self.tests_list.row(current)
 
-        self.questions_tabs.hide()
-        i = self._cache.get(current_index)
-        if i is None:
-            self._cache[current_index] = self.questions_tabs = QuestionsTabWidget(TESTS[current_index],
-                                                                                  current, parent=self)
-            self.questions_tabs.updateErrors.connect(self.update_status_bar)
-            self.questions_tabs.nameChanged.connect(self.update_name)
-            self.lyt.addWidget(self.questions_tabs, 0, 3, 3, 3)
-        else:
-            self.questions_tabs = self._cache[current_index]
-            self.questions_tabs.show()
+        self.tests_widget.setCurrentIndex(current_index)
+        self.update_status_bar()
 
-    def update_status_bar(self, errs: OrderedDict):
+    def update_status_bar(self, errs: OrderedDict = None):
+        if errs is None:
+            errs = self.tests_widget.currentWidget().errors
 
         if errs:
             self.sts_bar_lbl.setText("Error in the {} tab{}."
@@ -603,21 +635,15 @@ class QuestionsEditor(QtGui.QMainWindow):
         else:
             self.sts_bar_lbl.setText("Ready.")
 
-    @property
-    def edited(self):
-        return any(wid.edited for wid in self._cache.values())
-
     def closeEvent(self, event):
+
         if self.edited:
-            rslt = QtGui.QMessageBox.question(self, "Are you sure you want to exit?",
-                                              "You have some unsaved changes.",
-                                              QtGui.QMessageBox.Yes | QtGui.QMessageBox.No | QtGui.QMessageBox.Cancel)
-            if rslt == QtGui.QMessageBox.Yes:
-                edited_tests = [test.test for test in self._cache.values()]
-                ids = [test.id for test in edited_tests]
-                new_tests = [test for test in TESTS if test.id not in ids] + edited_tests
-                dump_tests(new_tests, res("tests2.enc", "state"), encrypt=True)
-            elif rslt == QtGui.QMessageBox.No:
+            result = QtGui.QMessageBox.question(self, "Are you sure you want to exit?",
+                                                "You have some unsaved changes.",
+                                                QtGui.QMessageBox.Yes | QtGui.QMessageBox.No | QtGui.QMessageBox.Cancel)
+            if result == QtGui.QMessageBox.Yes and self.save():
+                pass
+            elif result == QtGui.QMessageBox.No:
                 event.accept()
             else:
                 event.ignore()
@@ -625,3 +651,35 @@ class QuestionsEditor(QtGui.QMainWindow):
         if self.parent_window is not None:
             self.parent_window.parent_window.show()
         event.accept()
+
+    def save(self):
+        print("saved")
+        errors = self.tests_widget.currentWidget().errors
+        if errors:
+            QtGui.QMessageBox.warning(self, "Invalid Operation", "Cannot save while there's an error.")
+            return False
+        else:
+            self.sts_bar_lbl.setText("Saved Tests.")
+            QtCore.QTimer.singleShot(3000, self.update_status_bar)
+
+            new_tests = self.tests
+            for widget, test in zip(self.widgets, new_tests):
+                widget.s_test = test
+
+            import data
+            data.TESTS.clear()
+            data.TESTS.extend(new_tests)
+            dump_tests(new_tests, res("tests.enc", "state"), encrypt=True)
+            return True
+
+    @property
+    def edited(self):
+        return len(self.tests) != len(TESTS) or any(wid.edited for wid in self.widgets)
+
+    @property
+    def widgets(self) -> List[QuestionsTabWidget]:
+        return [self.tests_widget.widget(i) for i in range(0, self.tests_widget.count())]
+
+    @property
+    def tests(self) -> List[Test]:
+        return [widget.test for widget in self.widgets]

@@ -20,7 +20,7 @@ from utils.helpers import (
     _init, _defer
 )
 
-from tests import TESTS
+from data import TESTS
 
 # it's just used to make the garbage collector doesn't delete the window reference
 CURRENT_ACTIVE = [None]  # type: List[QtGui.QWidget]
@@ -155,7 +155,7 @@ class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's fu
         login_link = QtGui.QLabel("<a href='#open'>Open questions editor</a>")
         login_link.setOpenExternalLinks(False)
 
-        def f(s):
+        def f(_):
             auth = Auth()
             center_widget(auth)
             auth.parent_window = self

@@ -1,7 +1,8 @@
 import json
 import unicodedata
+from collections import namedtuple
 
-from typing import List
+from typing import List, Any, Dict
 
 from .helpers import (
     Encryptor,
