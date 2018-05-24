@@ -11,16 +11,15 @@ import sys
 from PyQt4 import QtGui, QtCore
 from typing import List
 
-from widgets.degreesviewer import DegreesViewer
-from widgets.editor import QuestionsEditor
-from widgets.innerwidgets import TestCard
-from widgets.tester import TestWizard
+from data import TESTS
 from utils.helpers import (
     res, center_widget,
     _init, _defer
 )
-
-from data import TESTS
+from widgets.degreesviewer import DegreesViewer
+from widgets.editor import TestsEditor
+from widgets.innerwidgets import TestCard
+from widgets.tester import TestWizard
 
 # it's just used to make the garbage collector doesn't delete the window reference
 CURRENT_ACTIVE = [None]  # type: List[QtGui.QWidget]
@@ -86,9 +85,9 @@ class Auth(QtGui.QMainWindow):
             if self.degrees.isChecked():
                 widget = DegreesViewer()
             else:
-                widget = QuestionsEditor()
+                widget = TestsEditor()
             CURRENT_ACTIVE[0] = widget
-            widget.parent_window = self
+            widget.parent_window = self.parent()
             center_widget(widget)
             widget.show()
             self.hide()
@@ -156,7 +155,7 @@ class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's fu
         login_link.setOpenExternalLinks(False)
 
         def f(_):
-            auth = Auth()
+            auth = Auth(parent=self)
             center_widget(auth)
             auth.parent_window = self
             auth.show()
@@ -187,7 +186,7 @@ def main():
     app.setApplicationName("Examer")
     app.setApplicationVersion("0.1")
     app.setWindowIcon(QtGui.QIcon(res("test.ico", "icon")))
-    main_widget = QuestionsEditor()
+    main_widget = DegreesViewer()
     center_widget(main_widget)
     main_widget.show()
     app.exec_()

@@ -7,7 +7,8 @@ from utils.helpers import (
     res,
 )
 from utils.parsers import dump_degrees, parse_degrees
-from utils.vals import headers
+from utils.vals import headers, GRADES
+from widgets.innerwidgets import ColorBox
 
 
 class TestWizard(QtGui.QWizard):
@@ -16,6 +17,7 @@ class TestWizard(QtGui.QWizard):
     def __init__(self, test: Test, parent: QtGui.QWidget = None):
         super().__init__(parent)
         self.test = test
+        self.question_num = len(self.test.questions)
         self.parent_window = None
         self.degree_per_q = self.test.degree / len(self.test.questions)
         self.setButtonText(self.NextButton, 'التالي >')
@@ -30,13 +32,13 @@ class TestWizard(QtGui.QWizard):
         self.setMinimumSize(480, 380)
         self.resize(720, 540)
 
-        # self.setStyleSheet("QWidget {font-family: Times; }\n"
-        #                    "QLabel {font: bold 15pt}\nQRadioButton, QCheckBox {font: 10pt}")
+        self.setStyleSheet("QWidget {font-family: Times; }\n"
+                           "QLabel {font: bold 15pt}\nQRadioButton, QCheckBox {font: 10pt}")
 
         self.addPage(FormPage())
 
-        for question in self.test.questions:
-            self.addPage(QuestionPage(question))
+        for id_, question in enumerate(self.test.questions):
+            self.addPage(QuestionPage(id_ + 1, question))
 
         self.addPage(FinalPage())
 
@@ -51,9 +53,8 @@ class TestWizard(QtGui.QWizard):
                 msg_box.addButton("&اجل", QtGui.QMessageBox.AcceptRole)
                 msg_box.addButton("&لا", QtGui.QMessageBox.RejectRole)
 
-                if msg_box.exec_() == QtGui.QMessageBox.AcceptRole:
-                    return True
-                return False
+                return msg_box.exec_() == QtGui.QMessageBox.AcceptRole
+
             return True
 
         # validation happens in the last question page (-2 by index of pages)
@@ -130,6 +131,7 @@ class TestWizard(QtGui.QWizard):
                 self.degrees.append(p.degree)
 
     def closeEvent(self, event: QtGui.QCloseEvent):
+        print("called")
         if not self.pageIds()[-1] > self.currentId() > 0:
             self.parent_window.show()
             event.accept()
@@ -142,14 +144,6 @@ class TestWizard(QtGui.QWizard):
 
 
 class FormPage(QtGui.QWizardPage):
-    GRADES = [
-        "الأول الإعدادي",
-        "الثاني الإعدادي",
-        "الثالث الإعدادي",
-        "الأول الثانوي",
-        "الثاني الثانوي",
-        "الثالث الثانوي",
-    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -180,10 +174,10 @@ class FormPage(QtGui.QWizardPage):
             font.setBold(True)
             i.setFont(font)
 
-        regexp = QtCore.QRegExp("^(\+\d\d?)?\d{6,11}$")
-        self.numberedit.setValidator(QtGui.QRegExpValidator(regexp, self.numberedit))
+        self.nameedit.setValidator(QtGui.QRegExpValidator(QtCore.QRegExp("^\w{3,}\s\w{3,}$"), self.nameedit))
+        self.numberedit.setValidator(QtGui.QRegExpValidator(QtCore.QRegExp("^(?:\+2)?01[0125]\d{8}"), self.numberedit))
 
-        self.gradecombo.addItems(["<ادخل صفك>"] + FormPage.GRADES)
+        self.gradecombo.addItems(["<ادخل صفك>"] + GRADES)
 
         self.gradecombo.model().item(0).setEnabled(False)
 
@@ -216,6 +210,13 @@ class FormPage(QtGui.QWizardPage):
 
         if len(self.nameedit.text().split(" ")) < 2:
             QtGui.QMessageBox.information(self, "خطأ في الاسم", 'يرجي ادخال الاسم ثنائيا او اكثر')
+        elif any(student.name == self.nameedit.text() and student.grade == self.gradecombo.currentText()
+                 for student in self.wizard().test.student_degrees):
+            return QtGui.QMessageBox.question(self, "خطأ في الإدخال",
+                                              "لقد امتحن '{}' (بالنظر للاسم والصف) هذا الإمتحات من قبل. "
+                                              "هل تريد إعادة الإمتحان (او انه شخص مختلف)؟"
+                                              .format(self.nameedit.text()),
+                                              QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes
         elif self.gradecombo.currentText() == "<ادخل صفك>":
             QtGui.QMessageBox.information(self, "خطأ في الصف", 'يرجي ادخال الصف')
         else:
@@ -225,20 +226,6 @@ class FormPage(QtGui.QWizardPage):
 
 
 class FinalPage(QtGui.QWizardPage):
-    class ColorBox(QtGui.QWidget):
-        def __init__(self, color: str, description: str, parent=None):
-            super().__init__(parent)
-            lyt = QtGui.QHBoxLayout()
-            self.setLayout(lyt)
-            lyt.setDirection(QtGui.QBoxLayout.RightToLeft)
-            widget = QtGui.QWidget()
-            widget_lyt = QtGui.QHBoxLayout()
-            widget.setLayout(widget_lyt)
-            widget_lyt.addWidget(QtGui.QLabel())
-            widget.setStyleSheet("background-color: {}".format(color))
-            widget.resize(50, 50)
-            lyt.addWidget(widget)
-            lyt.addWidget(QtGui.QLabel(description), 1)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -272,9 +259,12 @@ class FinalPage(QtGui.QWizardPage):
         colors_group.setTitle("الألوان")
         colors_lyt = QtGui.QVBoxLayout()
         colors_group.setLayout(colors_lyt)
-        colors_lyt.addWidget(FinalPage.ColorBox("grey", "لم يجب"))
-        colors_lyt.addWidget(FinalPage.ColorBox("red", "أجاب خطأً"))
-        colors_lyt.addWidget(FinalPage.ColorBox("green", "أجاب صوابًا"))
+        self.grey = ColorBox("grey", "لم يجب" " ({:.2f}%)")
+        self.red = ColorBox("red", "أجاب خطأً" " ({:.2f}%)")
+        self.green = ColorBox("green", "أجاب صوابًا" " ({:.2f}%)")
+        colors_lyt.addWidget(self.grey)
+        colors_lyt.addWidget(self.red)
+        colors_lyt.addWidget(self.green)
 
         group_and_color.addWidget(details_group)
         group_and_color.addWidget(colors_group)
@@ -284,13 +274,13 @@ class FinalPage(QtGui.QWizardPage):
     def initializePage(self):
         degrees = self.wizard().degrees
         test = self.wizard().test
-        name = self.field("name")
+        name = self.field("name").title()
         school = self.field("school")
-        grade = FormPage.GRADES[int(self.field("grade")) - 1]
+        grade = GRADES[int(self.field("grade")) - 1]
         number = self.field("number")
-        sum_of_degrees = sum(i for i in degrees if i != -1)
+        sum_of_degrees = float(sum(i for i in degrees if i != -1))
 
-        if number.startswith("01") and len(number) == 11:
+        if not number.startswith("+2"):
             number = "+2" + number
 
         self.nameL.setText(name)
@@ -317,7 +307,15 @@ class FinalPage(QtGui.QWizardPage):
                                      test.name,
                                      ]))
 
-        pieces = (len(left) * test.degree, len(failed_at) * test.degree, sum_of_degrees)
+        questions_n = len(test.questions)
+        left_n = len(left)
+        failed_at_n = len(failed_at)
+        self.grey.description.setText(self.grey.description.text().format(left_n / questions_n * 100))
+        self.red.description.setText(self.red.description.text().format(failed_at_n / questions_n * 100))
+        self.green.description.setText(
+            self.green.description.text().format((questions_n - (left_n + failed_at_n)) / questions_n * 100)
+        )
+        pieces = (left_n * test.degree / questions_n, failed_at_n * test.degree / questions_n, sum_of_degrees)
         set_angle = 0
         total = sum(pieces)
         colors = [QtGui.QColor(128, 128, 128), QtGui.QColor(255, 0, 0), QtGui.QColor(0, 128, 0)]
@@ -336,18 +334,16 @@ class FinalPage(QtGui.QWizardPage):
         view.setStyleSheet("background-color: transparent")
         self.lyt.insertWidget(0, view)
 
-        dump_degrees(parse_degrees(res("degrees.enc", "state")) + [StudentDegree(**student)],
+        dump_degrees(parse_degrees(res("degrees.enc", "state"), encrypted=True) + [StudentDegree(**student)],
                      res("degrees.enc", "state"), encrypt=True)
 
 
 class QuestionPage(QtGui.QWizardPage):
-    QUESTION_NUM = 0
 
-    def __init__(self, question: Question, parent=None):
+    def __init__(self, id_: int, question: Question, parent=None):
 
         super().__init__(parent)
-        QuestionPage.QUESTION_NUM += 1
-        self.id = QuestionPage.QUESTION_NUM
+        self.id = id_
         self.degree = -1
         random.shuffle(question.answers)
         self.question = question
@@ -445,4 +441,4 @@ class QuestionPage(QtGui.QWizardPage):
     def initializePage(self):
         time = self.wizard().time
         self.lcdScreen.display("%d:%02d" % (time // 60, time % 60))
-        self.number_label.setText(str(self.id) + " / " + str(QuestionPage.QUESTION_NUM))
+        self.number_label.setText("{} / {}".format(self.id, self.wizard().question_num))

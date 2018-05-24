@@ -225,6 +225,23 @@ class AnswerWidget(QtGui.QWidget):
     validityChanged = QtCore.pyqtSignal(bool, int, name="validityChanged")
 
 
+class ColorBox(QtGui.QWidget):
+    def __init__(self, color: str, description: str, parent=None):
+        super().__init__(parent)
+        lyt = QtGui.QHBoxLayout()
+        self.setLayout(lyt)
+        lyt.setDirection(QtGui.QBoxLayout.RightToLeft)
+        widget = QtGui.QWidget()
+        widget_lyt = QtGui.QHBoxLayout()
+        widget.setLayout(widget_lyt)
+        widget_lyt.addWidget(QtGui.QLabel())
+        widget.setStyleSheet("background-color: {}".format(color))
+        widget.resize(50, 50)
+        lyt.addWidget(widget)
+        self.description = QtGui.QLabel(description)
+        lyt.addWidget(self.description, 1)
+
+
 class TestCard(QtGui.QFrame):
     def __init__(self, test: Test, index: int, parent=None, **kwargs):
         super().__init__(parent, **kwargs)
@@ -235,10 +252,11 @@ class TestCard(QtGui.QFrame):
         lyt = QtGui.QGridLayout()
         lyt.addWidget(QtGui.QLabel("<b><font size=5>%s</font></b>" % test.name), 0, 0, alignment=QtCore.Qt.AlignLeft)
         lyt.addWidget(QtGui.QLabel("<hr>"), 1, 0, 1, 2)
-        lyt.addWidget(QtGui.QLabel("<font size=3 color=grey>%s</font>" % (test.description or "لا يوجد وصف")),
-                      1, 0, 2, 2, alignment=QtCore.Qt.AlignLeft)
+        lyt.addWidget(
+            QtGui.QLabel("<font size=3 color=grey>%s</font>" % (test.description or "<i>" "لا يوجد وصف" "</i>")),
+            1, 0, 2, 2, alignment=QtCore.Qt.AlignLeft)
         btn = QtGui.QPushButton("افتح", self)
-        btn.setIcon(QtGui.QIcon("arrow.png"))
+        btn.setIcon(QtGui.QIcon(res("arrow.png", "icon")))
         btn.clicked.connect(self.open)
         lyt.addWidget(QtGui.QLabel(), 2, 0)
         text = re.sub(r'\b(\d+)\b', r'<b>\1</b>', "%s | %d درجة | %d سؤال"

@@ -18,7 +18,7 @@ from .vals import (
 Answer = namedtuple("Answer", "string valid")
 Question = namedtuple("Question", "string pic answers")
 Test = namedtuple("Test", "id name description time questions degree student_degrees")
-StudentDegree = namedtuple("Degree", "name phone school grade degree out_of failed_at left test")
+StudentDegree = namedtuple("StudentDegree", "name phone school grade degree out_of failed_at left test")
 
 
 class Encryptor(object):
@@ -54,7 +54,6 @@ class Encryptor(object):
 
 
 class ReasonFlag(str, aenum.Flag, settings=(aenum.AutoValue,)):
-    _settings_ = aenum.AutoValue
 
     def __new__(cls, value, string):
         obj = str.__new__(cls, string)

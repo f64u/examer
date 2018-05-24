@@ -1,24 +1,27 @@
 from collections import OrderedDict
-from typing import List
 
 from PyQt4 import QtCore, QtGui
+from typing import List, Optional
 
 from data import TESTS
 from utils.helpers import (
     Test, Question, Answer,
     res, tab_repr,
-    ReasonFlag)
-from utils.parsers import dump_tests
+    ReasonFlag, StudentDegree)
+from utils.parsers import dump_tests, dump_degrees
 from widgets.innerwidgets import QuestionImage, AnswerWidget
 
 
 class TestDetails(QtGui.QWidget):
     class PreserveFocusReason(ReasonFlag):
         NONE = ''
-        INVALID_NAME = "Name cannot be less than three characters."
+        INVALID_NAME = "Test name cannot be less than three characters."
+        ALREADY_CHOSEN_NAME = "Test name must be unique (there's already a test with the same name)."
 
     def __init__(self, test: Test = None, parent: QtGui.QWidget = None):
         super().__init__(parent)
+        self.s_test = test
+        self.editor = self.parent().parent()  # type: TestsEditor
 
         lyt = QtGui.QGridLayout()
         self.want_focus_reasons = TestDetails.PreserveFocusReason.NONE
@@ -62,17 +65,26 @@ class TestDetails(QtGui.QWidget):
 
         lyt.addWidget(self.status, 5, 0, 1, 2)
 
-        if test is not None:
+        if self.s_test is not None:
             self.nameT.setText(test.name)
             self.descriptionT.setPlainText(test.description)
             self.timeT.setTime(QtCore.QTime(0, 0).addSecs(test.time))
             self.degreeT.setValue(test.degree)
 
-        self._check_reason(TestDetails.PreserveFocusReason.INVALID_NAME, test is None or not test.name)
+        self._check_reason(TestDetails.PreserveFocusReason.INVALID_NAME,
+                           self.s_test is None or len(self.s_test.name) < 3)
 
     def observe_name(self, s: str):
-        self._check_reason(TestDetails.PreserveFocusReason.INVALID_NAME, len(s) < 3)
-        if not len(s) < 3:
+        update = True
+        same_name_num = len(list(filter(lambda test: test == s, self.editor.names)))
+        for reason, happened in [(TestDetails.PreserveFocusReason.INVALID_NAME, len(s) < 3),
+                                 (TestDetails.PreserveFocusReason.ALREADY_CHOSEN_NAME,
+                                  (self.s_test is None and same_name_num > 0) or same_name_num > 1)]:
+            if happened:
+                update = False
+            self._check_reason(reason, happened)
+
+        if update:
             self.nameChanged.emit(s)
 
     def _check_reason(self, reason: PreserveFocusReason, happened: bool):
@@ -96,7 +108,7 @@ class TestDetails(QtGui.QWidget):
         time = self.timeT.time()  # type: QtCore.QTime
         return Test(-1, self.nameT.text(), self.descriptionT.toPlainText(),
                     time.second() + time.minute() * 60 + time.hour() * 60 * 60,
-                    [], self.degreeT.value(), [])
+                    [], float(self.degreeT.value()), [])
 
     wantFocusChanged = QtCore.pyqtSignal(PreserveFocusReason, name="wantFocusChange")
     nameChanged = QtCore.pyqtSignal(str, name="nameChanged")
@@ -137,7 +149,8 @@ class QuestionTab(QtGui.QWidget):
         self.setLayout(lyt)
 
         wrap = QtGui.QWidget()
-        wrap.setStyleSheet("background-color: transparent;")
+        wrap.setObjectName("wrap")
+        wrap.setStyleSheet("wrap { background-color: transparent; }")
         wrap.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Maximum)
         wrap.setLayout(self.answers_lyt)
         self.scroll = answers_scroll = QtGui.QScrollArea()
@@ -225,9 +238,9 @@ class QuestionTab(QtGui.QWidget):
                            any(not q.string for q in self.question.answers))
 
     def delete_answer(self, index):
-        if len(self.disabled_because) == 1 and index in self.disabled_because:
+        if [index] == self.disabled_because:
             self.disabled_because.clear()
-            self.answers[-1].mod.setEnabled(True)
+            self.answers[-1 if index != len(self.answers) - 1 else -2].mod.setEnabled(True)
 
         self.answers_num -= 1
         answer = self.answers[index]
@@ -306,7 +319,7 @@ class DeletedQuestion(QtGui.QWidget):
         self.link = QtGui.QLabel("<a href='#undo'>Undo Close Question {}</a>".format(self.index))
         self.link.setOpenExternalLinks(False)
 
-        def f(s):
+        def f(_):
             self.question.deleted = False
             self.openRequested.emit(self.index)
 
@@ -346,7 +359,7 @@ class QuestionsTabWidget(QtGui.QTabWidget):
         btn.clicked.connect(self.add_question)
         self.setCornerWidget(btn)
 
-        details = TestDetails(test)
+        details = TestDetails(test, parent=self)
 
         details.wantFocusChanged.connect(lambda r: self.updateErrors.emit(self.errors))
         details.nameChanged.connect(self.name_changed)
@@ -421,14 +434,21 @@ class QuestionsTabWidget(QtGui.QTabWidget):
     @property
     def test(self):
         details = self.widget(0).test  # type: Test
+
+        final_degrees = []
+        for degree in self.s_test.student_degrees:
+            degree_dict = degree._asdict()
+            degree_dict["test"] = details.name
+            final_degrees.append(StudentDegree(**degree_dict))
+
         return Test(self.index, details.name, details.description, details.time,
                     [self.widget(i).question for i in range(1, self.count()) if
                      isinstance(self.widget(i), QuestionTab)],
-                    details.degree, [])
+                    details.degree, final_degrees)
 
     @property
     def index(self):
-        questions_editor = self.parent().parent().parent()  # type: QuestionsEditor
+        questions_editor = self.parent().parent().parent()  # type: TestsEditor
         return questions_editor.tests_list.row(self._item)
 
     @property
@@ -438,21 +458,21 @@ class QuestionsTabWidget(QtGui.QTabWidget):
     @property
     def errors(self):
         errs = OrderedDict()
-        details_reason = self.widget(0).want_focus_reasons
-        if details_reason != TestDetails.PreserveFocusReason.NONE:
-            errs[0] = details_reason
+        details_reasons = self.widget(0).want_focus_reasons
+        if details_reasons != TestDetails.PreserveFocusReason.NONE:
+            errs[0] = details_reasons
 
         for i in range(1, self.count()):
             widget = self.widget(i)
             if isinstance(widget, (TestDetails, QuestionTab)):
-                reason = widget.want_focus_reasons
+                reasons = widget.want_focus_reasons
             elif isinstance(widget, DeletedQuestion):
-                reason = QuestionTab.PreserveFocusReason.NONE  # emulate that nothing is wrong
+                reasons = QuestionTab.PreserveFocusReason.NONE  # emulate that nothing is wrong
             else:
                 raise ValueError("Unknown page?")
 
-            if reason != QuestionTab.PreserveFocusReason.NONE:
-                errs[i] = reason
+            if reasons != QuestionTab.PreserveFocusReason.NONE:
+                errs[i] = reasons
 
         return errs
 
@@ -460,15 +480,16 @@ class QuestionsTabWidget(QtGui.QTabWidget):
     updateErrors = QtCore.pyqtSignal(OrderedDict, name="updateErrors")
 
 
-class QuestionsEditor(QtGui.QMainWindow):
+class TestsEditor(QtGui.QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self.just_deleted_a_test = False  # used in navigation (not to test that there were errors in the deleted test)
+        self.old_tests = None  # type: Optional[List[Test]]
 
         toolBar = QtGui.QToolBar()
         toolBar.setMovable(False)
-        save_btn = QtGui.QPushButton(QtGui.QIcon(res("save.png", "icon")), "Save")
+        self.save_btn = save_btn = QtGui.QPushButton(QtGui.QIcon(res("save.png", "icon")), "Save")
         save_btn.clicked.connect(self.save)
         save_btn.setToolTip("Save Tests")
         toolBar.addWidget(save_btn)
@@ -498,6 +519,20 @@ class QuestionsEditor(QtGui.QMainWindow):
         lyt.setMargin(10)
 
         self.tests_list = QtGui.QListWidget()
+
+        def f(event: QtGui.QContextMenuEvent):
+            selected_item = self.tests_list.itemAt(event.pos())
+            if selected_item is None:
+                return
+            menu = QtGui.QMenu()
+            delete = menu.addAction("Delete")
+            delete.setIcon(QtGui.QIcon(res("halt.png", "icon")))
+            action = menu.exec_(QtGui.QCursor.pos())
+
+            if action == delete:
+                self.delete_test(index=self.tests_list.row(selected_item))
+
+        self.tests_list.contextMenuEvent = f
         self.tests_list.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
         self.tests_list.currentItemChanged.connect(self.item_changed)
 
@@ -533,6 +568,7 @@ class QuestionsEditor(QtGui.QMainWindow):
 
             question_widget = QuestionsTabWidget(TESTS[i], item, parent=self)
             question_widget.updateErrors.connect(self.update_status_bar)
+            question_widget.updateErrors.connect(lambda err: self.save_btn.setEnabled(not err))
             question_widget.nameChanged.connect(self.update_name)
             self.tests_widget.addWidget(question_widget)
         if i >= 0:
@@ -545,12 +581,19 @@ class QuestionsEditor(QtGui.QMainWindow):
         lyt.setRowStretch(1, 1)
 
     def add_test(self, _):
+        cur_wid = self.tests_widget.currentWidget()
+        errors = cur_wid and cur_wid.errors
+        if errors:
+            QtGui.QMessageBox.warning(self, "Invalid Operation", "Cannot add test while there's an error.")
+            return
+
         q = QtGui.QDialog(self)
         q.setWindowTitle("Enter Test Details")
         q.setModal(True)
+        q.resize(450, 400)
         lay = QtGui.QVBoxLayout()
         q.setLayout(lay)
-        test_widg = TestDetails()
+        test_widg = TestDetails(parent=q)
         q.test = test_widg
         lay.addWidget(test_widg)
         buttons = QtGui.QDialogButtonBox(QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel,
@@ -558,39 +601,39 @@ class QuestionsEditor(QtGui.QMainWindow):
         buttons.button(QtGui.QDialogButtonBox.Ok).setDisabled(True)
         q.buttons = buttons
         test_widg.wantFocusChanged.connect(
-            lambda r: buttons.button(QtGui.QDialogButtonBox.Ok).setDisabled(r != TestDetails.PreserveFocusReason.NONE))
+            lambda r: buttons.button(QtGui.QDialogButtonBox.Ok).setDisabled(r != TestDetails.PreserveFocusReason.NONE)
+        )
 
         def f():
             test_obj = test_widg.test
-            if not any(test_obj.name == t.name for t in TESTS):
-                q.accept()
-                item = QtGui.QListWidgetItem(test_obj.name, self.tests_list)
+            item = QtGui.QListWidgetItem(test_obj.name, self.tests_list)
 
-                question_widget = QuestionsTabWidget(test_obj, item, parent=self)
-                question_widget.updateErrors.connect(self.update_status_bar)
-                question_widget.nameChanged.connect(self.update_name)
-                self.tests_widget.addWidget(question_widget)
-            else:
-                QtGui.QMessageBox.warning(q, "Error",
-                                          "Test '%s' already exists, please choose another name" % test_obj.name)
+            question_widget = QuestionsTabWidget(test_obj, item, parent=self)
+            question_widget.updateErrors.connect(self.update_status_bar)
+            question_widget.nameChanged.connect(self.update_name)
+            self.tests_widget.addWidget(question_widget)
+
+            q.accept()
 
         buttons.accepted.connect(f)
         buttons.rejected.connect(q.reject)
         lay.addWidget(buttons)
         q.show()
 
-    def delete_test(self):
-        if QtGui.QMessageBox.question(self, "Are you sure?", "Are you sure you want to delete '%s' ? This "
+    def delete_test(self, _=None, index=-1):
+        if QtGui.QMessageBox.question(self, "Are you sure?", "Are you sure you want to delete {!r} ? This "
                                                              "<font color=red><b>cannot</b></font> be <font color=red>"
-                                                             "<b>undone</b></font>" % self.tests_list.currentItem().text(),
+                                                             "<b>undone</b>"
+                                                             "</font>".format(self.tests_list.currentItem().text()),
                                       QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes:
-            index = self.tests_list.row(self.tests_list.currentItem())
+            # index = self.tests_list.row(self.tests_list.currentItem())
+            if index == -1:
+                index = self.tests_list.currentRow()
             self.just_deleted_a_test = True
             self.tests_list.takeItem(index)
             if index == self.tests_list.count():
-                print(True)
                 self._current_row -= 2
-            else:
+            elif index <= self.tests_list.currentRow():
                 self._current_row -= 1
             self.tests_widget.removeWidget(self.tests_widget.widget(index))
 
@@ -602,14 +645,12 @@ class QuestionsEditor(QtGui.QMainWindow):
         previous_index = self.tests_list.row(previous)
         current_index = self.tests_list.row(current)
 
-        print(previous_index, current_index)
-
         if current_index == self._current_row:
             return
 
         widget = self.tests_widget.widget(previous_index)
         errs = widget.errors if widget is not None else []
-        if not self.just_deleted_a_test and len(errs) != 0:
+        if not self.just_deleted_a_test and errs:
             locs = ", ".join(tab_repr(i) for i in errs)
             QtGui.QMessageBox.warning(self, "Cannot Change The Current Test.",
                                       "Test `{}` has some errors so you can't leave it. See the {} tab{}."
@@ -639,21 +680,20 @@ class QuestionsEditor(QtGui.QMainWindow):
 
         if self.edited:
             result = QtGui.QMessageBox.question(self, "Are you sure you want to exit?",
-                                                "You have some unsaved changes.",
+                                                "You have some unsaved changes. Do you want to save them?",
                                                 QtGui.QMessageBox.Yes | QtGui.QMessageBox.No | QtGui.QMessageBox.Cancel)
             if result == QtGui.QMessageBox.Yes and self.save():
                 pass
             elif result == QtGui.QMessageBox.No:
-                event.accept()
+                pass
             else:
                 event.ignore()
                 return
         if self.parent_window is not None:
-            self.parent_window.parent_window.show()
+            self.parent_window.show()
         event.accept()
 
-    def save(self):
-        print("saved")
+    def save(self) -> bool:
         errors = self.tests_widget.currentWidget().errors
         if errors:
             QtGui.QMessageBox.warning(self, "Invalid Operation", "Cannot save while there's an error.")
@@ -666,19 +706,31 @@ class QuestionsEditor(QtGui.QMainWindow):
             for widget, test in zip(self.widgets, new_tests):
                 widget.s_test = test
 
-            import data
-            data.TESTS.clear()
-            data.TESTS.extend(new_tests)
+            self.old_tests = TESTS[:]
+            TESTS.clear()
+            TESTS.extend(new_tests)
+
             dump_tests(new_tests, res("tests.enc", "state"), encrypt=True)
+            final_degrees = []
+            for test in new_tests:
+                final_degrees.extend(test.student_degrees)
+            dump_degrees(final_degrees, res("degrees.enc", "state"), encrypt=True)
             return True
 
     @property
-    def edited(self):
+    def edited(self) -> bool:
         return len(self.tests) != len(TESTS) or any(wid.edited for wid in self.widgets)
 
     @property
     def widgets(self) -> List[QuestionsTabWidget]:
         return [self.tests_widget.widget(i) for i in range(0, self.tests_widget.count())]
+
+    @property
+    def names(self) -> List[str]:
+        names = []
+        for widget in self.widgets:
+            names.append(widget.widget(0).nameT.text())
+        return names
 
     @property
     def tests(self) -> List[Test]:
