@@ -7,16 +7,15 @@
 
 import hashlib
 import sys
+from typing import List
 
 from PyQt4 import QtGui, QtCore
-from typing import List
 
 from data import TESTS
 from utils.helpers import (
     res, center_widget,
     _init, _defer
 )
-from widgets.degreesviewer import DegreesViewer
 from widgets.editor import TestsEditor
 from widgets.innerwidgets import TestCard
 from widgets.tester import TestWizard
@@ -36,18 +35,7 @@ class Auth(QtGui.QMainWindow):
         self.setCentralWidget(frm)
 
         lyt = QtGui.QGridLayout()
-        self.types = QtGui.QButtonGroup()
-
-        self.questions = QtGui.QRadioButton("Questions Editor")
-        self.questions.toggle()  # make it pressed by default
-        self.degrees = QtGui.QRadioButton("Degrees Viewer")
-        self.types.addButton(self.questions)
-        self.types.addButton(self.degrees)
-
-        lyt.addWidget(self.questions, 0, 0)
-        lyt.addWidget(self.degrees, 0, 1)
-
-        lyt.addWidget(QtGui.QLabel(), 1, 0)
+        frm.setLayout(lyt)
 
         nameL = QtGui.QLabel("Enter your Name:")
         self.nameT = QtGui.QLineEdit(self)
@@ -61,19 +49,19 @@ class Auth(QtGui.QMainWindow):
         self.passwordT.setEchoMode(QtGui.QLineEdit.Password)
         passwordL.setBuddy(self.passwordT)
 
-        lyt.addWidget(nameL, 2, 0)
-        lyt.addWidget(self.nameT, 2, 1)
-        lyt.addWidget(passwordL, 3, 0)
-        lyt.addWidget(self.passwordT, 3, 1)
+        lyt.addWidget(QtGui.QLabel("Login to access the tests"), 0, 0, 1, 2, alignment=QtCore.Qt.AlignCenter)
+
+        lyt.addWidget(nameL, 1, 0)
+        lyt.addWidget(self.nameT, 1, 1)
+        lyt.addWidget(passwordL, 2, 0)
+        lyt.addWidget(self.passwordT, 2, 1)
 
         self.status = QtGui.QLabel()
-        lyt.addWidget(self.status, 4, 0, 1, 2)
+        lyt.addWidget(self.status, 3, 0, 1, 2)
 
         btn = QtGui.QPushButton("Login")
         btn.clicked.connect(self.login)
-        lyt.addWidget(btn, 5, 1)
-
-        frm.setLayout(lyt)
+        lyt.addWidget(btn, 5, 0, 1, 2, alignment=QtCore.Qt.AlignCenter)
 
     def login(self):
         name = self.nameT.text()
@@ -82,10 +70,7 @@ class Auth(QtGui.QMainWindow):
                 hashlib.md5(name.encode()).digest() == b'\tM\x84\x1b\x8f\x171\x8bZ\xf6h\xa2\xe7\xde"P'
                 and hashlib.md5(password.encode()).digest() == b'\xec+\xb9B\xd9\xcb>\xc6dh\xe5\xcc=\xfa\x144'
         ):
-            if self.degrees.isChecked():
-                widget = DegreesViewer()
-            else:
-                widget = TestsEditor()
+            widget = TestsEditor()
             CURRENT_ACTIVE[0] = widget
             widget.parent_window = self.parent()
             center_widget(widget)
@@ -151,7 +136,7 @@ class TestChooser(QtGui.QWidget):  # the real MainWindow is a QWidget, that's fu
             lyt.addWidget(QtGui.QLabel("<hr>"))
             lyt.addWidget(QtGui.QLabel("النهاية"), alignment=QtCore.Qt.AlignCenter)
 
-        login_link = QtGui.QLabel("<a href='#open'>Open questions editor</a>")
+        login_link = QtGui.QLabel("<a href='#open'>Open tests editor</a>")
         login_link.setOpenExternalLinks(False)
 
         def f(_):
@@ -186,7 +171,7 @@ def main():
     app.setApplicationName("Examer")
     app.setApplicationVersion("0.1")
     app.setWindowIcon(QtGui.QIcon(res("test.ico", "icon")))
-    main_widget = DegreesViewer()
+    main_widget = TestChooser()
     center_widget(main_widget)
     main_widget.show()
     app.exec_()

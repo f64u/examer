@@ -1,5 +1,6 @@
 import os
 import re
+from typing import Optional
 
 from PyQt4 import QtGui, QtCore
 
@@ -7,10 +8,11 @@ from utils.helpers import (
     Test, Answer,
     res, format_secs,
 )
+from utils.vals import GRADES
 
 
 class EditableLabel(QtGui.QLineEdit):
-    def __init__(self, text: str, parent=None):
+    def __init__(self, text: str, parent=None) -> None:
         super().__init__(text, parent)
 
         self.setReadOnly(True)
@@ -38,7 +40,7 @@ class EditableLabel(QtGui.QLineEdit):
 
 
 class IconButton(QtGui.QLabel):
-    def __init__(self, icon: QtGui.QPixmap, index: int):
+    def __init__(self, icon: QtGui.QPixmap, index: int) -> None:
         super().__init__()
 
         self.icon = icon
@@ -65,7 +67,7 @@ class IconButton(QtGui.QLabel):
 
 
 class QuestionImage(QtGui.QFrame):
-    def __init__(self, image: str = None, parent=None):
+    def __init__(self, image: str = None, parent=None) -> None:
         super().__init__(parent)
 
         self._path = image
@@ -144,12 +146,12 @@ class QuestionImage(QtGui.QFrame):
 
 
 class AnswerWidget(QtGui.QWidget):
-    def __init__(self, answer: Answer, index: int, last=False, parent: QtGui.QWidget = None, **kwargs):
+    def __init__(self, answer: Answer, index: int, last=False, parent: QtGui.QWidget = None, **kwargs) -> None:
         QtGui.QWidget.__init__(self, parent, **kwargs)
 
         self._last = last
         self.index = index
-        self.mod = None
+        self.mod = None     # type: IconButton
         self.deleted = False
 
         lyt = QtGui.QHBoxLayout()
@@ -226,7 +228,7 @@ class AnswerWidget(QtGui.QWidget):
 
 
 class ColorBox(QtGui.QWidget):
-    def __init__(self, color: str, description: str, parent=None):
+    def __init__(self, color: str, description: str, parent=None) -> None:
         super().__init__(parent)
         lyt = QtGui.QHBoxLayout()
         self.setLayout(lyt)
@@ -243,7 +245,7 @@ class ColorBox(QtGui.QWidget):
 
 
 class TestCard(QtGui.QFrame):
-    def __init__(self, test: Test, index: int, parent=None, **kwargs):
+    def __init__(self, test: Test, index: int, parent=None, **kwargs) -> None:
         super().__init__(parent, **kwargs)
         self.index = index
 
@@ -271,3 +273,113 @@ class TestCard(QtGui.QFrame):
         self.chose.emit(self.index)
 
     chose = QtCore.pyqtSignal(int, name="chose")
+
+
+class TabBar(QtGui.QTabBar):
+    def mousePressEvent(self, event: QtGui.QMouseEvent):
+        self.setMovable(self.tabAt(event.pos()) not in (0, 1))
+        super().mousePressEvent(event)
+
+
+class NameItemDelegate(QtGui.QItemDelegate):
+    def createEditor(self, parent: QtGui.QWidget, option: QtGui.QStyleOptionViewItem,
+                     index: QtCore.QModelIndex) -> QtGui.QWidget:
+        line_edit = QtGui.QLineEdit(parent)
+
+        def f(event: QtGui.QFocusEvent):
+            QtGui.QLineEdit.focusOutEvent(line_edit, event)
+            if not line_edit.hasAcceptableInput():
+                QtGui.QMessageBox.warning(parent, "Invalid Name", "{!r} is not valid name, it should contain"
+                                                                  " the first name and the last name separated"
+                                                                  " by a space.".format(line_edit.text()))
+                self.acceptableInputChanged.emit(index.row(), False)
+            else:
+                self.acceptableInputChanged.emit(index.row(), True)
+
+        line_edit.focusOutEvent = f
+        line_edit.setValidator(QtGui.QRegExpValidator(QtCore.QRegExp("^\w{3,}\s\w{3,}$")))
+        return line_edit
+
+    def setModelData(self, editor: QtGui.QWidget, model: QtCore.QAbstractItemModel, index: QtCore.QModelIndex) -> None:
+        assert isinstance(editor, QtGui.QLineEdit)
+        text = editor.text()
+        model.setData(index, text.title() if editor.hasAcceptableInput() else text, QtCore.Qt.EditRole)
+
+    acceptableInputChanged = QtCore.pyqtSignal(int, bool, name="acceptableInputChanged")
+
+
+class SchoolItemDelegate(QtGui.QItemDelegate):
+
+    def createEditor(self, parent: QtGui.QWidget, option: QtGui.QStyleOptionViewItem,
+                     index: QtCore.QModelIndex) -> QtGui.QWidget:
+        line_edit = QtGui.QLineEdit(parent)
+
+        def f(event: QtGui.QFocusEvent):
+            QtGui.QLineEdit.focusOutEvent(line_edit, event)
+            if not line_edit.hasAcceptableInput():
+                QtGui.QMessageBox.warning(parent, "Invalid School Name", "School name cannot be empty.")
+                self.acceptableInputChanged.emit(index.row(), False)
+            else:
+                self.acceptableInputChanged.emit(index.row(), True)
+
+        line_edit.focusOutEvent = f
+        line_edit.setValidator(QtGui.QRegExpValidator(QtCore.QRegExp("^\w+$")))
+        return line_edit
+
+    acceptableInputChanged = QtCore.pyqtSignal(int, bool, name="acceptableInputChanged")
+
+    def setModelData(self, editor: QtGui.QWidget, model: QtCore.QAbstractItemModel, index: QtCore.QModelIndex) -> None:
+        assert isinstance(editor, QtGui.QLineEdit)
+        text = editor.text()
+        model.setData(index, text.title() if editor.hasAcceptableInput() else text, QtCore.Qt.EditRole)
+
+
+class GradeItemDelegate(QtGui.QItemDelegate):
+
+    def createEditor(self, parent: QtGui.QWidget, option: QtGui.QStyleOptionViewItem,
+                     index: QtCore.QModelIndex) -> QtGui.QWidget:
+        combo = QtGui.QComboBox(parent)
+        combo.addItems(GRADES)
+        return combo
+
+    def setEditorData(self, editor: QtGui.QWidget, index: QtCore.QModelIndex) -> None:
+        assert isinstance(editor, QtGui.QComboBox)
+        editor.setCurrentIndex(editor.findText(index.model().data(index, QtCore.Qt.EditRole)))
+
+    def setModelData(self, editor: QtGui.QWidget, model: QtCore.QAbstractItemModel, index: QtCore.QModelIndex) -> None:
+        assert isinstance(editor, QtGui.QComboBox)
+
+        model.setData(index, editor.currentText(), QtCore.Qt.EditRole)
+
+
+class PhoneItemDelegate(QtGui.QItemDelegate):
+
+    def createEditor(self, parent: QtGui.QWidget, option: QtGui.QStyleOptionViewItem,
+                     index: QtCore.QModelIndex) -> QtGui.QWidget:
+        line_edit = QtGui.QLineEdit(parent)
+
+        def f(event: QtGui.QFocusEvent):
+            QtGui.QLineEdit.focusOutEvent(line_edit, event)
+            if not line_edit.hasAcceptableInput():
+                QtGui.QMessageBox.warning(parent, "Invalid Phone Number",
+                                          "{!r} is not a valid phone number,"
+                                          " it should be 11 numbers started with '01'"
+                                          " preceded by an optional '+2'".format(line_edit.text()))
+                self.acceptableInputChanged.emit(index.row(), False)
+            else:
+                self.acceptableInputChanged.emit(index.row(), True)
+
+        line_edit.focusOutEvent = f
+        line_edit.setValidator(QtGui.QRegExpValidator(QtCore.QRegExp("^(\+2)?01[0125]\d{8}$")))
+        return line_edit
+
+    def setModelData(self, editor: QtGui.QWidget, model: QtCore.QAbstractItemModel, index: QtCore.QModelIndex) -> None:
+        assert isinstance(editor, QtGui.QLineEdit)
+
+        text = editor.text()
+        if editor.hasAcceptableInput() and not text.startswith("+2"):
+            text = "+2" + text
+
+        model.setData(index, text, QtCore.Qt.EditRole)
+
+    acceptableInputChanged = QtCore.pyqtSignal(int, bool, name="acceptableInputChanged")

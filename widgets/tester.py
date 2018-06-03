@@ -1,24 +1,27 @@
 import random
+from typing import List, Optional
 
 from PyQt4 import QtGui, QtCore
 
+from data import TESTS
 from utils.helpers import (
     Test, Question, StudentDegree,
     res,
 )
-from utils.parsers import dump_degrees, parse_degrees
+from utils.parsers import dump_tests
 from utils.vals import headers, GRADES
 from widgets.innerwidgets import ColorBox
 
 
 class TestWizard(QtGui.QWizard):
-    degrees = []
+    degrees = []  # type: List[int]
 
-    def __init__(self, test: Test, parent: QtGui.QWidget = None):
+    def __init__(self, test: Test, parent: QtGui.QWidget = None) -> None:
         super().__init__(parent)
         self.test = test
         self.question_num = len(self.test.questions)
-        self.parent_window = None
+        self.parent_window = None   # type: Optional[QtGui.QWidget]
+        self.already_visited_pages = None
         self.degree_per_q = self.test.degree / len(self.test.questions)
         self.setButtonText(self.NextButton, 'التالي >')
         self.setButtonText(self.CancelButton, 'الغاء')
@@ -131,13 +134,14 @@ class TestWizard(QtGui.QWizard):
                 self.degrees.append(p.degree)
 
     def closeEvent(self, event: QtGui.QCloseEvent):
-        print("called")
         if not self.pageIds()[-1] > self.currentId() > 0:
-            self.parent_window.show()
+            if self.parent_window is not None:
+                self.parent_window.show()
             event.accept()
         elif (QtGui.QMessageBox.question(self, "هل انت متأكد؟", "انت علي وشك ان تغلق النافذة، كل الإجابات سوف تنسي.",
                                          QtGui.QMessageBox.Yes | QtGui.QMessageBox.No)) == QtGui.QMessageBox.Yes:
-            self.parent_window.show()
+            if self.parent_window is not None:
+                self.parent_window.show()
             event.accept()
         else:
             event.ignore()
@@ -334,8 +338,8 @@ class FinalPage(QtGui.QWizardPage):
         view.setStyleSheet("background-color: transparent")
         self.lyt.insertWidget(0, view)
 
-        dump_degrees(parse_degrees(res("degrees.enc", "state"), encrypted=True) + [StudentDegree(**student)],
-                     res("degrees.enc", "state"), encrypt=True)
+        test.student_degrees.append(StudentDegree(**student))
+        dump_tests(TESTS, res("data.enc", "state"), encrypt=True)
 
 
 class QuestionPage(QtGui.QWizardPage):

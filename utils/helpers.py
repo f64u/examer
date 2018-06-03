@@ -18,7 +18,7 @@ from .vals import (
 Answer = namedtuple("Answer", "string valid")
 Question = namedtuple("Question", "string pic answers")
 Test = namedtuple("Test", "id name description time questions degree student_degrees")
-StudentDegree = namedtuple("StudentDegree", "name phone school grade degree out_of failed_at left test")
+StudentDegree = namedtuple("StudentDegree", "name phone school grade degree out_of failed_at left")
 
 
 class Encryptor(object):
@@ -105,7 +105,10 @@ def res(name: str, kind="image") -> str:
 
 
 def _init():
-    for e in [("degrees.enc", "state"), ("tests.enc", "state")]:
+    req_files = [
+        ("data.enc", "state"),
+    ]
+    for e in req_files:
         r = res(*e)
         if not os.path.isfile(r):
             with open(r, "w") as f:
@@ -118,4 +121,9 @@ def _defer():
 
 
 def tab_repr(index: int, deleted=False) -> str:
-    return "Details" if index == 0 else "Q " + str(index) + (" (Deleted)" if deleted else "")
+    if index == 0:
+        return "Details"
+    if index == 1:
+        return "Degrees"
+
+    return "Q " + str(index - 1) + (" (Deleted)" if deleted else "")
